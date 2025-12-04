@@ -1,0 +1,93 @@
+# ============================================
+# Core Dependencies
+# ============================================
+
+# LangChain/LangGraph - Agent framework
+langchain==0.3.13
+langchain-community==0.3.13
+langgraph==0.2.58
+
+# Configuration & Utilities
+pyyaml==6.0.2
+python-dotenv==1.0.1
+pydantic==2.10.3
+
+# HTTP & Async
+requests==2.32.3
+aiohttp==3.11.11
+
+# ============================================
+# LLM Providers
+# ============================================
+
+# Local Models (Ollama)
+langchain-ollama==0.2.0
+
+# Remote Models (OpenAI-compatible)
+langchain-openai==0.2.14
+
+# Optional: Anthropic Claude (uncomment if using Claude models)
+# langchain-anthropic==0.3.0
+
+# Optional: Google Gemini (uncomment if using Gemini via AI Studio)
+# langchain-google-genai==2.0.0
+
+# ============================================
+# Interface & Input
+# ============================================
+
+# Hotkey listener (requires root on Linux, falls back to CLI)
+keyboard==0.13.5
+
+# GUI (tkinter is built-in with Python 3)
+
+# ============================================
+# Tools & Features
+# ============================================
+
+# Web Search
+duckduckgo-search==6.3.5
+
+# Optional: Premium web search (uncomment if you have Tavily API key)
+# tavily-python==0.5.0
+
+# Code Execution (Docker integration)
+docker==7.1.0
+
+# ============================================
+# Development & Testing
+# ============================================
+
+# Testing framework
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-mock==3.14.0
+
+# Optional: Code coverage
+# pytest-cov==6.0.0
+
+# ============================================
+# System Integration (Linux)
+# ============================================
+
+# Optional: Systemd integration (uncomment for systemd logging on Linux)
+# systemd-python==235
+
+# ============================================
+# Notes
+# ============================================
+#
+# Installation:
+#   pip install -r requirements.txt
+#
+# Optional dependencies:
+#   - Uncomment specific provider integrations as needed
+#   - langchain-anthropic: For Claude models
+#   - langchain-google-genai: For Gemini models
+#   - tavily-python: For premium web search
+#   - systemd-python: For systemd logging integration
+#
+# Platform notes:
+#   - keyboard: Requires root privileges on Linux for global hotkeys
+#   - docker: Requires Docker daemon running for code execution
+#

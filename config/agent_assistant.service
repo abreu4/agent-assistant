@@ -1,0 +1,20 @@
+[Unit]
+Description=Agent Assistant Background Service
+After=network.target
+
+[Service]
+Type=simple
+User=tiago
+WorkingDirectory=/home/tiago/projects/agent_assistant
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY=/home/tiago/.Xauthority"
+EnvironmentFile=/home/tiago/projects/agent_assistant/.env
+ExecStart=/home/tiago/miniconda3/bin/python3 -u /home/tiago/projects/agent_assistant/run_service.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agent-assistant
+
+[Install]
+WantedBy=multi-user.target

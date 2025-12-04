@@ -1,0 +1,179 @@
+service:
+  name: Agent Assistant
+  version: 1.0.0
+  log_level: INFO
+  debug: false  # Set to true for verbose logging
+llm:
+  local:
+    provider: ollama
+    model: llama3.1:8b
+    temperature: 0.7
+    base_url: http://localhost:11434
+    classifier_model: llama3.2:3b
+    fallback_model: mistral:7b
+
+    # Available local models for random selection
+    available_models:
+      default:  # General purpose models
+        - id: llama3.1:8b
+          name: Llama 3.1 8B
+          description: Meta's Llama 3.1 - balanced performance
+        - id: llama3.2:3b
+          name: Llama 3.2 3B
+          description: Smaller, faster Llama model
+        - id: mistral:7b
+          name: Mistral 7B
+          description: Efficient and capable 7B model
+        - id: phi3:mini
+          name: Phi-3 Mini
+          description: Microsoft's compact model
+        - id: gemma2:2b
+          name: Gemma 2 2B
+          description: Google's lightweight model
+        - id: qwen2.5:3b
+          name: Qwen 2.5 3B
+          description: Alibaba's multilingual model
+
+      code:  # Code-focused models
+        - id: qwen2.5-coder:7b
+          name: Qwen 2.5 Coder 7B
+          description: Alibaba's code-specialized model
+        - id: codellama:7b
+          name: CodeLlama 7B
+          description: Meta's code-focused Llama variant
+        - id: deepseek-coder:6.7b
+          name: DeepSeek Coder 6.7B
+          description: DeepSeek's coding specialist
+        - id: starcoder2:7b
+          name: StarCoder2 7B
+          description: BigCode's code generation model
+        - id: codegemma:7b
+          name: CodeGemma 7B
+          description: Google's code-focused Gemma
+
+    # Enable random model selection
+    random_selection: true
+
+    # Current mode: "default" or "code"
+    mode: default
+  remote:
+    provider: openrouter
+    model: google/gemini-2.5-pro-exp-03-25:free
+    temperature: 0.6
+    max_tokens: 4096
+
+    # API Base URLs
+    openrouter_base: https://openrouter.ai/api/v1
+    moonshot_base: https://api.moonshot.cn/v1
+    anthropic_base: https://api.anthropic.com
+    google_base: https://generativelanguage.googleapis.com/v1beta
+    groq_base: https://api.groq.com/openai/v1
+
+    available_models:
+    - id: google/gemini-2.5-pro-exp-03-25:free
+      name: Gemini 2.5 Pro Exp
+      description: Google's experimental model with 1M token context
+    - id: meta-llama/llama-4-maverick:free
+      name: Llama 4 Maverick
+      description: Meta's 400B MoE model with 17B active parameters
+    - id: deepseek/deepseek-chat-v3-0324:free
+      name: DeepSeek Chat V3
+      description: DeepSeek's dialogue-optimized variant
+    - id: mistralai/mistral-small-3.1-24b-instruct:free
+      name: Mistral Small 3.1
+      description: Mistral's 24B parameter instruction model
+    - id: deepseek/deepseek-r1-zero:free
+      name: DeepSeek R1 Zero
+      description: DeepSeek's research-oriented reasoning model
+    - id: nvidia/llama-3.1-nemotron-nano-8b-v1:free
+      name: Nemotron Nano 8B
+      description: NVIDIA's 8B optimized transformer
+    - id: meta-llama/llama-4-scout:free
+      name: Llama 4 Scout
+      description: Optimized 109B variant with 17B active parameters
+    - id: qwen/qwen2.5-vl-3b-instruct:free
+      name: Qwen 2.5 VL
+      description: Alibaba's compact 3B multimodal model
+    - id: nousresearch/deephermes-3-llama-3-8b-preview:free
+      name: DeepHermes 3
+      description: Nous Research's 8B tuned model
+    - id: moonshotai/kimi-k2
+      name: Kimi K2
+      description: Moonshot AI's flagship model
+      provider: moonshot
+    - id: claude-3-5-sonnet-20241022
+      name: Claude 3.5 Sonnet
+      description: Anthropic's most capable model
+      provider: anthropic
+    - id: claude-3-5-haiku-20241022
+      name: Claude 3.5 Haiku
+      description: Anthropic's fastest model
+      provider: anthropic
+    - id: gemini-2.0-flash-exp
+      name: Gemini 2.0 Flash
+      description: Google's fast experimental model
+      provider: google
+    - id: gemini-1.5-pro
+      name: Gemini 1.5 Pro
+      description: Google's production model
+      provider: google
+    - id: llama-3.3-70b-versatile
+      name: Llama 3.3 70B
+      description: Meta's versatile model via Groq
+      provider: groq
+    - id: mixtral-8x7b-32768
+      name: Mixtral 8x7B
+      description: Mistral's MoE model via Groq
+      provider: groq
+  routing:
+    prefer_local: true
+    cost_limit_monthly: 50
+    complexity_threshold: medium
+    force_model: local
+hotkey:
+  combination: ctrl+alt+space
+  enabled: true
+gui:
+  window_width: 600
+  window_height: 200
+  always_on_top: true
+  font_family: Arial
+  font_size: 12
+  theme: light
+agent:
+  max_iterations: 10
+  timeout: 300
+  workspace_dir: /home/tiago/agent_workspace
+  enable_streaming: false
+tools:
+  web_search:
+    enabled: true
+    provider: duckduckgo
+    max_results: 5
+  file_operations:
+    enabled: true
+    root_dir: /home/tiago/agent_workspace
+    allowed_extensions:
+    - .txt
+    - .md
+    - .py
+    - .json
+    - .yaml
+    - .yml
+    - .csv
+    max_file_size_mb: 10
+  code_execution:
+    enabled: true
+    sandbox: docker
+    timeout: 30
+    memory_limit: 256m
+    allowed_languages:
+    - python
+    - javascript
+    - bash
+logging:
+  use_systemd: true
+  file_logging: false
+  file_path: /var/log/agent_assistant/app.log
+  rotation_max_bytes: 10485760
+  rotation_backup_count: 5
