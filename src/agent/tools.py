@@ -29,6 +29,10 @@ def get_agent_tools() -> List:
     if config.get('tools.file_operations.enabled', True):
         tools.extend(_get_file_tools())
 
+    # Workspace RAG (semantic search)
+    if config.get('tools.workspace_rag.enabled', True):
+        tools.extend(_get_rag_tools())
+
     # Web search
     if config.get('tools.web_search.enabled', True):
         tools.append(_get_search_tool())
@@ -42,8 +46,8 @@ def get_agent_tools() -> List:
 
 
 def _get_file_tools() -> List:
-    """Get file operation tools."""
-    workspace_dir = str(config.get_workspace_dir())
+    """Get file operation tools (uses current working directory)."""
+    workspace_dir = str(config.get_workspace_dir())  # Returns Path.cwd()
 
     tools = [
         ReadFileTool(root_dir=workspace_dir),
@@ -351,3 +355,86 @@ def _get_code_execution_tool():
     else:
         logger.warning(f"Unknown sandbox type: {sandbox_type}, disabling code execution")
         return _get_code_execution_tool()  # Returns disabled version
+
+
+def _get_rag_tools() -> List:
+    """Get workspace RAG (semantic search) tools."""
+    from .workspace_rag import get_workspace_rag
+
+    tools = []
+
+    @tool
+    def search_workspace(query: str, file_type: str = None) -> str:
+        """
+        Semantically search workspace files for relevant code or content.
+        Use this when you need to find specific information in the codebase.
+
+        Args:
+            query: What to search for (e.g., "authentication logic", "database models", "error handling")
+            file_type: Optional file extension filter (e.g., ".py", ".md")
+
+        Returns:
+            Relevant code/content from workspace files
+        """
+        try:
+            rag = get_workspace_rag()
+
+            # Search for relevant chunks
+            results = rag.search(query, k=3, filter_by_type=file_type)
+
+            if not results:
+                return f"No results found for '{query}' in workspace files."
+
+            # Format results
+            output = f"Found {len(results)} relevant sections:\n\n"
+
+            for i, (doc, score) in enumerate(results, 1):
+                file_path = doc.metadata.get('file_path', 'unknown')
+                content = doc.page_content.strip()
+
+                output += f"[{i}] {file_path} (relevance: {1-score:.2f})\n"
+                output += "```\n"
+                output += content[:500]  # Limit to 500 chars
+                if len(content) > 500:
+                    output += "\n...(truncated)"
+                output += "\n```\n\n"
+
+            return output
+
+        except Exception as e:
+            logger.error(f"Workspace search error: {e}")
+            return f"Search failed: {e}"
+
+    @tool
+    def list_workspace_files() -> str:
+        """
+        Get overview of workspace structure and files.
+        Shows file tree and summary of indexed files.
+
+        Returns:
+            Workspace file tree and summary
+        """
+        try:
+            rag = get_workspace_rag()
+
+            # Get file tree
+            tree = rag.get_file_tree(max_depth=2)
+
+            # Get summary
+            summary = rag.get_file_summary()
+
+            output = "📁 Workspace Structure:\n\n"
+            output += tree
+            output += "\n\n"
+            output += summary
+
+            return output
+
+        except Exception as e:
+            logger.error(f"List workspace error: {e}")
+            return f"Failed to list workspace: {e}"
+
+    tools.append(search_workspace)
+    tools.append(list_workspace_files)
+
+    return tools

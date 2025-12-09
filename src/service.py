@@ -1,4 +1,4 @@
-"""Main background service for Agent Assistant."""
+"""Main CLI service for Agent Assistant."""
 import asyncio
 import signal
 import sys
@@ -6,8 +6,6 @@ from queue import Queue, Empty
 from threading import Thread, Event
 
 from .agent.workflow import HybridAgent
-from .gui.popup import PopupManager
-from .gui.hotkey import HotkeyListener
 from .gui.loading import LoadingSpinner
 from .gui.streaming import ProgressiveDisplay
 from .utils.config import config
@@ -15,28 +13,23 @@ from .utils.logging import setup_logging, get_logger
 
 
 class AgentService:
-    """Main service orchestrating agent, GUI, and hotkey."""
+    """Main CLI service for the agent."""
 
     def __init__(self):
         """Initialize the service."""
-        # Setup logging
-        log_level = config.get('service.log_level', 'INFO')
-        use_systemd = config.get('logging.use_systemd', True)
+        # Setup logging - use WARNING level if debug is false
+        debug_mode = config.get('service.debug', False)
+        log_level = 'DEBUG' if debug_mode else 'WARNING'
+        use_systemd = config.get('logging.use_systemd', False)  # Default to False for CLI
         self.logger = setup_logging(log_level=log_level, use_systemd=use_systemd)
 
-        self.logger.debug("Initializing Agent Assistant Service")
+        self.logger.debug("Initializing Agent Assistant CLI Service")
 
         # Create components
         self.stop_event = Event()
         self.task_queue = Queue()
-        self.cli_mode = False  # Track if running in CLI mode
 
         self.agent = HybridAgent()
-        self.popup_manager = PopupManager(self.task_queue)
-        self.hotkey_listener = HotkeyListener(
-            self.on_hotkey_triggered,
-            self.stop_event
-        )
 
         # Task processor thread
         self.task_thread = None
@@ -45,15 +38,6 @@ class AgentService:
         self.loop = None
 
         self.logger.debug("Service initialized")
-
-    def on_hotkey_triggered(self):
-        """Called when global hotkey is pressed."""
-        self.logger.info("Hotkey triggered, showing popup")
-
-        try:
-            self.popup_manager.show()
-        except Exception as e:
-            self.logger.error(f"Error showing popup: {e}")
 
     def process_tasks(self):
         """
@@ -92,47 +76,36 @@ class AgentService:
 
                         self.logger.debug(f"Task completed with model: {model_used}")
 
-                        # Display result
-                        if self.cli_mode:
-                            # Print to console in CLI mode with progressive display
-                            display = ProgressiveDisplay()
-                            display.start("Response", model=model_used)
+                        # Display result in CLI
+                        display = ProgressiveDisplay()
+                        display.start("Response", model=model_used)
 
-                            # Display the response progressively
-                            # Split into words for progressive effect
-                            words = response.split()
-                            for i, word in enumerate(words):
-                                if i == 0:
-                                    display.add_text(word)
-                                else:
-                                    display.add_text(' ' + word)
+                        # Display the response progressively
+                        # Split into words for progressive effect
+                        words = response.split()
+                        for i, word in enumerate(words):
+                            if i == 0:
+                                display.add_text(word)
+                            else:
+                                display.add_text(' ' + word)
 
-                            # Add final newline before footer
-                            print()
+                        # Add final newline before footer
+                        print()
 
-                            display.finish()
-                        else:
-                            # Show popup in GUI mode
-                            self.popup_manager.display_result(response, model_used)
+                        display.finish()
 
                     except Exception as e:
                         self.logger.error(f"Task processing error: {e}")
-                        if self.cli_mode:
-                            RED = '\033[1;31m'
-                            CYAN = '\033[1;36m'
-                            RESET = '\033[0m'
-                            BOLD = '\033[1m'
+                        RED = '\033[1;31m'
+                        CYAN = '\033[1;36m'
+                        RESET = '\033[0m'
+                        BOLD = '\033[1m'
 
-                            print(f"\n{CYAN}{'=' * 60}{RESET}")
-                            print(f"{BOLD}{RED}❌ Error{RESET}")
-                            print(f"{CYAN}{'=' * 60}{RESET}")
-                            print(f"Error processing request:\n\n{e}")
-                            print(f"{CYAN}{'=' * 60}{RESET}")
-                        else:
-                            self.popup_manager.display_result(
-                                f"Error processing request:\n\n{e}",
-                                "error"
-                            )
+                        print(f"\n{CYAN}{'=' * 60}{RESET}")
+                        print(f"{BOLD}{RED}❌ Error{RESET}")
+                        print(f"{CYAN}{'=' * 60}{RESET}")
+                        print(f"Error processing request:\n\n{e}")
+                        print(f"{CYAN}{'=' * 60}{RESET}")
 
                 self.task_queue.task_done()
 
@@ -168,12 +141,12 @@ class AgentService:
 
     def run(self):
         """
-        Main service loop.
+        Main service loop - runs in CLI mode.
 
-        Starts all components and blocks until shutdown.
+        Starts the task processor and runs the interactive CLI.
         """
         self.logger.debug("=" * 60)
-        self.logger.debug("Agent Assistant Service Starting")
+        self.logger.debug("Agent Assistant CLI Service Starting")
         self.logger.debug("=" * 60)
 
         # Setup signal handlers
@@ -184,19 +157,11 @@ class AgentService:
             self.task_thread = Thread(target=self.process_tasks, daemon=False)
             self.task_thread.start()
 
-            self.logger.debug("All components started successfully")
-            self.logger.debug(f"Hotkey: {config.hotkey_combination}")
+            self.logger.debug("Task processor started successfully")
             self.logger.debug("Service is ready!")
 
-            # Try to start hotkey listener (blocking)
-            try:
-                self.hotkey_listener.start()
-            except Exception as e:
-                self.logger.warning(f"Hotkey listener failed to start: {e}")
-                self.logger.warning("Falling back to CLI mode")
-
-                # Run in CLI mode instead
-                self.run_cli_mode()
+            # Run in CLI mode
+            self.run_cli_mode()
 
         except KeyboardInterrupt:
             self.logger.info("Keyboard interrupt received")
@@ -232,8 +197,8 @@ class AgentService:
         print(f"  {YELLOW}models{RESET}           - List available remote models")
         print(f"  {YELLOW}switch <number>{RESET}  - Switch to a different remote model")
         print(f"  {YELLOW}current{RESET}          - Show current remote model")
-        print(f"  {YELLOW}mode <type>{RESET}      - Switch mode (default/code)")
-        print(f"  {YELLOW}showmode{RESET}         - Show current local mode")
+        print(f"  {YELLOW}sticky{RESET}           - Show sticky model status")
+        print(f"  {YELLOW}reset-sticky{RESET}     - Reset sticky model preferences")
 
         print(f"\n{CYAN}{'=' * 60}{RESET}")
 
@@ -283,16 +248,13 @@ class AgentService:
                         print(f"Invalid command. Use: switch <number>")
                     continue
 
-                if prompt.lower().startswith('mode '):
-                    try:
-                        mode = prompt.split()[1].lower()
-                        self._switch_local_mode(mode)
-                    except (ValueError, IndexError) as e:
-                        print(f"Invalid command. Use: mode <default|code>")
+
+                if prompt.lower() == 'sticky':
+                    self._show_sticky_status()
                     continue
 
-                if prompt.lower() in ['showmode', 'show-mode']:
-                    self._show_local_mode()
+                if prompt.lower() in ['reset-sticky', 'reset']:
+                    self._reset_sticky_models()
                     continue
 
                 # Submit task
@@ -489,68 +451,97 @@ class AgentService:
             self.logger.error(f"Error switching model: {e}")
             print(f"\n{RED}Error:{RESET} {e}")
 
-    def _show_local_mode(self):
-        """Show the current local model mode."""
+
+    def _show_sticky_status(self):
+        """Show the current sticky model and locked model status."""
         try:
             # ANSI color codes
             CYAN = '\033[1;36m'
             GREEN = '\033[1;32m'
             YELLOW = '\033[1;33m'
+            GRAY = '\033[0;37m'
+            MAGENTA = '\033[1;35m'
             RESET = '\033[0m'
             BOLD = '\033[1m'
 
-            current_mode = config.get_local_mode()
+            sticky_enabled = config.get_sticky_model_enabled()
+            locked_models = self.agent.llm_system.get_all_locked_models()
 
             print(f"\n{CYAN}{'=' * 60}{RESET}")
-            print(f"{BOLD}{GREEN}🎯 Current Local Mode{RESET}")
+            print(f"{BOLD}{GREEN}📌 Model Lock Status{RESET}")
             print(f"{CYAN}{'=' * 60}{RESET}\n")
-            print(f"{BOLD}{current_mode.upper()}{RESET} mode")
 
-            if current_mode == 'code':
-                print(f"{YELLOW}Using code-focused models{RESET}")
+            # Show locked models (current session)
+            print(f"{BOLD}{MAGENTA}🔒 Currently Locked Models (This Session):{RESET}\n")
+
+            local_locked = locked_models.get('local')
+            remote_locked = locked_models.get('remote')
+
+            if local_locked:
+                print(f"  💻 Local : {GREEN}✓{RESET} {local_locked}")
             else:
-                print(f"{YELLOW}Using general-purpose models{RESET}")
+                print(f"  💻 Local : {YELLOW}⚠{RESET} {GRAY}Not locked{RESET}")
+
+            if remote_locked:
+                print(f"  🌐 Remote: {GREEN}✓{RESET} {remote_locked}")
+            else:
+                print(f"  🌐 Remote: {YELLOW}⚠{RESET} {GRAY}Not locked{RESET}")
+
+            # Show sticky models (persisted across sessions)
+            print(f"\n{CYAN}{'-' * 60}{RESET}\n")
+            print(f"{BOLD}Sticky Model:{RESET} {GREEN}Enabled{RESET}" if sticky_enabled else f"{BOLD}Sticky Model:{RESET} {YELLOW}Disabled{RESET}")
+            print()
+
+            if sticky_enabled:
+                print(f"{BOLD}💾 Saved for Next Session:{RESET}\n")
+
+                saved_local = config.get_last_successful_model('local')
+                saved_remote = config.get_last_successful_model('remote')
+
+                if saved_local:
+                    print(f"  💻 Local : {saved_local}")
+                else:
+                    print(f"  💻 Local : {GRAY}None{RESET}")
+
+                if saved_remote:
+                    print(f"  🌐 Remote: {saved_remote}")
+                else:
+                    print(f"  🌐 Remote: {GRAY}None{RESET}")
+            else:
+                print(f"{YELLOW}Sticky model is disabled. Models will be re-tested each session.{RESET}")
 
             print(f"\n{CYAN}{'=' * 60}{RESET}")
+            print(f"{GRAY}💡 Locked models are selected during warmup and used for all requests.{RESET}")
+            print(f"{GRAY}   If a locked model fails, a new one is automatically tested and locked.{RESET}")
+            print(f"{CYAN}{'=' * 60}{RESET}")
         except Exception as e:
-            self.logger.error(f"Error showing mode: {e}")
+            self.logger.error(f"Error showing sticky status: {e}")
             print(f"\033[1;31mError:\033[0m {e}")
 
-    def _switch_local_mode(self, mode: str):
-        """
-        Switch local model mode.
-
-        Args:
-            mode: Mode to switch to ('default' or 'code')
-        """
+    def _reset_sticky_models(self):
+        """Reset sticky model preferences."""
         try:
             # ANSI color codes
             GREEN = '\033[1;32m'
             YELLOW = '\033[1;33m'
-            RED = '\033[1;31m'
+            CYAN = '\033[1;36m'
             RESET = '\033[0m'
             BOLD = '\033[1m'
 
-            if mode not in ['default', 'code']:
-                print(f"\n{RED}Invalid mode. Use: mode default{RESET} or {RED}mode code{RESET}")
-                return
+            print(f"\n{YELLOW}⏳ Resetting sticky model preferences...{RESET}")
 
-            print(f"\n{YELLOW}⏳ Switching to {BOLD}{mode}{RESET}{YELLOW} mode...{RESET}")
+            # Reset preferences
+            config.set_last_successful_model('local', None)
+            config.set_last_successful_model('remote', None)
 
-            config.set_local_mode(mode)
+            print(f"{GREEN}✓ Sticky model preferences have been reset{RESET}")
+            print(f"{CYAN}The agent will test models in priority order during next warmup.{RESET}")
 
-            print(f"{GREEN}✓ Switched to {BOLD}{mode.upper()}{RESET}{GREEN} mode{RESET}")
-
-            if mode == 'code':
-                print(f"{YELLOW}Now using code-focused models (CodeLlama, DeepSeek Coder, etc.){RESET}")
-            else:
-                print(f"{YELLOW}Now using general-purpose models (Llama, Mistral, etc.){RESET}")
-
-            self.logger.info(f"Switched local mode to: {mode}")
+            self.logger.info("Sticky model preferences reset")
 
         except Exception as e:
-            self.logger.error(f"Error switching mode: {e}")
-            print(f"\n{RED}Error:{RESET} {e}")
+            self.logger.error(f"Error resetting sticky models: {e}")
+            print(f"\n\033[1;31mError:\033[0m {e}")
 
     def shutdown(self):
         """Graceful shutdown of all components."""

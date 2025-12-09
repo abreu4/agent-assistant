@@ -2,7 +2,7 @@ service:
   name: Agent Assistant
   version: 1.0.0
   log_level: INFO
-  debug: false  # Set to true for verbose logging
+  debug: false
 llm:
   local:
     provider: ollama
@@ -11,148 +11,201 @@ llm:
     base_url: http://localhost:11434
     classifier_model: llama3.2:3b
     fallback_model: mistral:7b
-
-    # Available local models for random selection
     available_models:
-      default:  # General purpose models
-        - id: llama3.1:8b
-          name: Llama 3.1 8B
-          description: Meta's Llama 3.1 - balanced performance
-        - id: llama3.2:3b
-          name: Llama 3.2 3B
-          description: Smaller, faster Llama model
-        - id: mistral:7b
-          name: Mistral 7B
-          description: Efficient and capable 7B model
-        - id: phi3:mini
-          name: Phi-3 Mini
-          description: Microsoft's compact model
-        - id: gemma2:2b
-          name: Gemma 2 2B
-          description: Google's lightweight model
-        - id: qwen2.5:3b
-          name: Qwen 2.5 3B
-          description: Alibaba's multilingual model
-
-      code:  # Code-focused models
-        - id: qwen2.5-coder:7b
-          name: Qwen 2.5 Coder 7B
-          description: Alibaba's code-specialized model
-        - id: codellama:7b
-          name: CodeLlama 7B
-          description: Meta's code-focused Llama variant
-        - id: deepseek-coder:6.7b
-          name: DeepSeek Coder 6.7B
-          description: DeepSeek's coding specialist
-        - id: starcoder2:7b
-          name: StarCoder2 7B
-          description: BigCode's code generation model
-        - id: codegemma:7b
-          name: CodeGemma 7B
-          description: Google's code-focused Gemma
-
-    # Enable random model selection
+    - id: llama3.1:8b
+      name: Llama 3.1 8B
+      description: Meta's Llama 3.1 - balanced performance
+      context_window: 8192
+      max_output_tokens: 2048
+    - id: llama3.2:3b
+      name: Llama 3.2 3B
+      description: Smaller, faster Llama model
+      context_window: 4096
+      max_output_tokens: 1024
+    - id: mistral:7b
+      name: Mistral 7B
+      description: Efficient and capable 7B model
+      context_window: 8192
+      max_output_tokens: 2048
+    - id: phi3:mini
+      name: Phi-3 Mini
+      description: Microsoft's compact model
+      context_window: 4096
+      max_output_tokens: 1024
+    - id: gemma2:2b
+      name: Gemma 2 2B
+      description: Google's lightweight model
+      context_window: 4096
+      max_output_tokens: 1024
+    - id: qwen2.5:3b
+      name: Qwen 2.5 3B
+      description: Alibaba's multilingual model
+      context_window: 8192
+      max_output_tokens: 2048
     random_selection: true
-
-    # Current mode: "default" or "code"
-    mode: default
   remote:
     provider: openrouter
-    model: google/gemini-2.5-pro-exp-03-25:free
+    model: mistralai/mistral-small-3.1-24b-instruct:free
     temperature: 0.6
     max_tokens: 4096
-
-    # API Base URLs
+    openai_base: https://api.openai.com/v1
     openrouter_base: https://openrouter.ai/api/v1
     moonshot_base: https://api.moonshot.cn/v1
     anthropic_base: https://api.anthropic.com
     google_base: https://generativelanguage.googleapis.com/v1beta
     groq_base: https://api.groq.com/openai/v1
-
     available_models:
+    - id: gpt-4o
+      name: GPT-4o
+      description: OpenAI's fastest and most affordable flagship model
+      provider: openai
+      context_window: 128000
+      max_output_tokens: 16384
+    - id: gpt-4o-mini
+      name: GPT-4o Mini
+      description: OpenAI's small, affordable model for fast tasks
+      provider: openai
+      context_window: 128000
+      max_output_tokens: 16384
+    - id: gpt-4-turbo
+      name: GPT-4 Turbo
+      description: OpenAI's latest GPT-4 Turbo with vision
+      provider: openai
+      context_window: 128000
+      max_output_tokens: 4096
+    - id: gpt-3.5-turbo
+      name: GPT-3.5 Turbo
+      description: OpenAI's fast, inexpensive model for simple tasks
+      provider: openai
+      context_window: 16385
+      max_output_tokens: 4096
     - id: google/gemini-2.5-pro-exp-03-25:free
       name: Gemini 2.5 Pro Exp
       description: Google's experimental model with 1M token context
-    - id: meta-llama/llama-4-maverick:free
-      name: Llama 4 Maverick
-      description: Meta's 400B MoE model with 17B active parameters
-    - id: deepseek/deepseek-chat-v3-0324:free
-      name: DeepSeek Chat V3
-      description: DeepSeek's dialogue-optimized variant
-    - id: mistralai/mistral-small-3.1-24b-instruct:free
-      name: Mistral Small 3.1
-      description: Mistral's 24B parameter instruction model
-    - id: deepseek/deepseek-r1-zero:free
-      name: DeepSeek R1 Zero
-      description: DeepSeek's research-oriented reasoning model
-    - id: nvidia/llama-3.1-nemotron-nano-8b-v1:free
-      name: Nemotron Nano 8B
-      description: NVIDIA's 8B optimized transformer
-    - id: meta-llama/llama-4-scout:free
-      name: Llama 4 Scout
-      description: Optimized 109B variant with 17B active parameters
-    - id: qwen/qwen2.5-vl-3b-instruct:free
-      name: Qwen 2.5 VL
-      description: Alibaba's compact 3B multimodal model
-    - id: nousresearch/deephermes-3-llama-3-8b-preview:free
-      name: DeepHermes 3
-      description: Nous Research's 8B tuned model
-    - id: moonshotai/kimi-k2
-      name: Kimi K2
-      description: Moonshot AI's flagship model
-      provider: moonshot
+      context_window: 1000000
+      max_output_tokens: 8192
     - id: claude-3-5-sonnet-20241022
       name: Claude 3.5 Sonnet
       description: Anthropic's most capable model
       provider: anthropic
+      context_window: 200000
+      max_output_tokens: 8192
     - id: claude-3-5-haiku-20241022
       name: Claude 3.5 Haiku
       description: Anthropic's fastest model
       provider: anthropic
+      context_window: 200000
+      max_output_tokens: 4096
     - id: gemini-2.0-flash-exp
       name: Gemini 2.0 Flash
       description: Google's fast experimental model
       provider: google
+      context_window: 1000000
+      max_output_tokens: 8192
     - id: gemini-1.5-pro
       name: Gemini 1.5 Pro
       description: Google's production model
       provider: google
+      context_window: 2000000
+      max_output_tokens: 8192
+    - id: meta-llama/llama-4-maverick:free
+      name: Llama 4 Maverick
+      description: Meta's 400B MoE model with 17B active parameters
+      context_window: 128000
+      max_output_tokens: 4096
+    - id: meta-llama/llama-4-scout:free
+      name: Llama 4 Scout
+      description: Optimized 109B variant with 17B active parameters
+      context_window: 128000
+      max_output_tokens: 4096
     - id: llama-3.3-70b-versatile
       name: Llama 3.3 70B
       description: Meta's versatile model via Groq
       provider: groq
+      context_window: 128000
+      max_output_tokens: 4096
+    - id: deepseek/deepseek-chat-v3-0324:free
+      name: DeepSeek Chat V3
+      description: DeepSeek's dialogue-optimized variant
+      context_window: 64000
+      max_output_tokens: 4096
+    - id: deepseek/deepseek-r1-zero:free
+      name: DeepSeek R1 Zero
+      description: DeepSeek's research-oriented reasoning model
+      context_window: 64000
+      max_output_tokens: 4096
+    - id: mistralai/mistral-small-3.1-24b-instruct:free
+      name: Mistral Small 3.1
+      description: Mistral's 24B parameter instruction model
+      context_window: 32000
+      max_output_tokens: 4096
     - id: mixtral-8x7b-32768
       name: Mixtral 8x7B
       description: Mistral's MoE model via Groq
       provider: groq
+      context_window: 32768
+      max_output_tokens: 4096
+    - id: nvidia/llama-3.1-nemotron-nano-8b-v1:free
+      name: Nemotron Nano 8B
+      description: NVIDIA's 8B optimized transformer
+      context_window: 128000
+      max_output_tokens: 4096
+    - id: moonshotai/kimi-k2
+      name: Kimi K2
+      description: Moonshot AI's flagship model
+      provider: moonshot
+      context_window: 200000
+      max_output_tokens: 4096
+    - id: qwen/qwen2.5-vl-3b-instruct:free
+      name: Qwen 2.5 VL
+      description: Alibaba's compact 3B multimodal model
+      context_window: 32000
+      max_output_tokens: 2048
+    - id: nousresearch/deephermes-3-llama-3-8b-preview:free
+      name: DeepHermes 3
+      description: Nous Research's 8B tuned model
+      context_window: 8192
+      max_output_tokens: 2048
   routing:
     prefer_local: true
     cost_limit_monthly: 50
     complexity_threshold: medium
-    force_model: local
-hotkey:
-  combination: ctrl+alt+space
-  enabled: true
-gui:
-  window_width: 600
-  window_height: 200
-  always_on_top: true
-  font_family: Arial
-  font_size: 12
-  theme: light
+    force_model: local  # Force local by default for job agent
+    sticky_model: true
+    last_successful_local_model: llama3.1:8b
+    last_successful_remote_model: mistralai/mistral-small-3.1-24b-instruct:free
 agent:
   max_iterations: 10
   timeout: 300
-  workspace_dir: /home/tiago/agent_workspace
   enable_streaming: false
+  memory:
+    strategy: sliding_window
+    max_messages: 20
+    reserve_tokens: 1000
+    summarize_threshold: 0.8
+job_agent:
+  documents_path: ~/job_applications/documents
+  email:
+    provider: gmail
+    check_interval_minutes: 30
+    max_emails_per_sync: 100
+    index_on_startup: true
+  tracking:
+    database_path: ~/.job_agent/jobs.db
+    auto_extract_metadata: true
 tools:
+  workspace_rag:
+    enabled: true
+    auto_index_on_startup: true
+    index_on_query: false
+    comment: Works on current working directory (repo root)
   web_search:
     enabled: true
     provider: duckduckgo
     max_results: 5
   file_operations:
     enabled: true
-    root_dir: /home/tiago/agent_workspace
+    comment: Uses current working directory as root
     allowed_extensions:
     - .txt
     - .md
@@ -161,9 +214,17 @@ tools:
     - .yaml
     - .yml
     - .csv
+    - .js
+    - .ts
+    - .jsx
+    - .tsx
+    - .html
+    - .css
+    - .sh
+    - .toml
     max_file_size_mb: 10
   code_execution:
-    enabled: true
+    enabled: false
     sandbox: docker
     timeout: 30
     memory_limit: 256m

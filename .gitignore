@@ -127,6 +127,7 @@ $RECYCLE.BIN/
 .claude/
 .cursor/
 .aider/
+.agent_index/
 
 # ============================================
 # Documentation Build

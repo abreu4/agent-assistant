@@ -9,6 +9,7 @@ from langgraph.prebuilt import ToolNode
 from .llm_system import HybridLLMSystem, ModelTier
 from .router import Router, TaskClassification
 from .tools import get_agent_tools
+from .memory import MemoryManager
 from ..utils.config import config
 from ..utils.logging import get_logger
 
@@ -39,6 +40,7 @@ class HybridAgent:
         self.llm_system = HybridLLMSystem()
         self.router = Router(self.llm_system)
         self.tools = get_agent_tools()
+        self.memory_manager = MemoryManager()
         self.graph = None
 
         logger.info("HybridAgent initialized")
@@ -48,7 +50,26 @@ class HybridAgent:
         logger.debug("Warming up models...")
         await self.llm_system.warmup()
         self.graph = self._build_graph()
+
+        # Index workspace if enabled
+        if config.get('tools.workspace_rag.enabled', True):
+            if config.get('tools.workspace_rag.auto_index_on_startup', True):
+                try:
+                    logger.info("Indexing workspace files...")
+                    from .workspace_rag import get_workspace_rag
+                    rag = get_workspace_rag()
+                    await self._index_workspace_async(rag)
+                    logger.info("✓ Workspace indexed")
+                except Exception as e:
+                    logger.warning(f"Workspace indexing failed: {e}")
+
         logger.debug("Agent ready")
+
+    async def _index_workspace_async(self, rag):
+        """Index workspace in background."""
+        import asyncio
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, rag.index_workspace)
 
     def _build_graph(self) -> StateGraph:
         """Build the LangGraph workflow."""
@@ -105,8 +126,8 @@ class HybridAgent:
 
         return state
 
-    def _route_node(self, state: AgentState) -> AgentState:
-        """Determine which model to use."""
+    async def _route_node(self, state: AgentState) -> AgentState:
+        """Determine which model to use and ensure it's locked."""
         # Check if we're retrying after failure
         if state.get("retry_count", 0) > 0:
             logger.debug(f"Retry attempt {state['retry_count']}")
@@ -116,8 +137,9 @@ class HybridAgent:
 
             # If current tier is remote and we haven't tried 3 models yet
             if current_tier == "remote" and remote_retry_count < 3:
-                # Try next remote model
-                logger.info(f"⚠️  Model failed, trying alternative remote model ({remote_retry_count + 1}/3)")
+                # Relock to find a new working remote model
+                logger.info(f"⚠️  Model failed, finding alternative remote model ({remote_retry_count + 1}/3)")
+                await self.llm_system.relock_model("remote")
                 state["model_tier"] = "remote"
                 state["remote_retry_count"] = remote_retry_count + 1
             else:
@@ -126,10 +148,16 @@ class HybridAgent:
                 if current_tier == "remote":
                     logger.warning("⚠️  All remote models failed, falling back to local model")
                     state["model_tier"] = "local"
+                    # Ensure local model is locked
+                    if not self.llm_system.get_locked_local_model():
+                        await self.llm_system.relock_model("local")
                 else:
                     # Try escalating from local to remote
                     new_tier = self.router.should_escalate(current_tier, state.get("error", ""))
                     state["model_tier"] = new_tier
+                    # Ensure the escalated tier is locked
+                    if new_tier == "remote" and not self.llm_system.get_locked_remote_model():
+                        await self.llm_system.relock_model("remote")
 
         else:
             # Normal routing
@@ -147,54 +175,76 @@ class HybridAgent:
             )
             state["model_tier"] = tier
 
+            # Ensure the selected tier has a locked model
+            if tier == "local" and not self.llm_system.get_locked_local_model():
+                logger.info("No locked local model, finding one...")
+                await self.llm_system.relock_model("local")
+            elif tier == "remote" and not self.llm_system.get_locked_remote_model():
+                logger.info("No locked remote model, finding one...")
+                await self.llm_system.relock_model("remote")
+
         logger.debug(f"Routing to: {state['model_tier']}")
         return state
 
     async def _agent_node(self, state: AgentState) -> AgentState:
-        """Execute query with selected model."""
+        """Execute query with locked model."""
         model_tier = state["model_tier"]
 
         try:
-            # If using remote, potentially switch to a different remote model
-            if model_tier == "remote":
-                remote_models_tried = state.get("remote_models_tried", [])
-                available_models = self.llm_system.get_available_remote_models()
-                current_model = self.llm_system.get_current_remote_model()
-
-                # If this is a retry and we've tried the current model, switch to next
-                if state.get("retry_count", 0) > 0 and current_model in remote_models_tried:
-                    # Find next untried model
-                    for model in available_models:
-                        if model['id'] not in remote_models_tried:
-                            logger.info(f"🔄 Switching to: {model['name']}")
-                            self.llm_system.switch_remote_model(model['id'])
-                            current_model = model['id']
-                            break
-
-                # Track this model
-                if current_model not in remote_models_tried:
-                    remote_models_tried.append(current_model)
-                    state["remote_models_tried"] = remote_models_tried
-
-                # Find model name for logging
-                model_info = next((m for m in available_models if m['id'] == current_model), None)
-                model_display = model_info['name'] if model_info else current_model
-
-                logger.debug(f"Using remote model: {model_display} ({len(remote_models_tried)}/3 tried)")
-
             logger.debug(f"Executing with {model_tier} model")
 
-            # Get appropriate model
+            # Update status overlay
+            try:
+                from ..gui.status_overlay import update_status
+                if model_tier == "remote":
+                    locked_model = self.llm_system.get_locked_remote_model()
+                    if locked_model:
+                        # Get short name
+                        models = self.llm_system.get_available_remote_models()
+                        model_info = next((m for m in models if m['id'] == locked_model), None)
+                        name = model_info['name'] if model_info else locked_model
+                        update_status(f"🌐 Using remote\n{name}", '#00d4ff')
+                else:
+                    locked_model = self.llm_system.get_locked_local_model()
+                    if locked_model:
+                        update_status(f"💻 Using local\n{locked_model}", '#00d4ff')
+            except Exception:
+                pass
+
+            # Get locked model for this tier
             model = self.llm_system.get_model(model_tier)
+
+            # Log which locked model we're using
+            if model_tier == "remote":
+                locked_model = self.llm_system.get_locked_remote_model()
+                if locked_model:
+                    logger.debug(f"Using locked remote model: {locked_model}")
+            else:
+                locked_model = self.llm_system.get_locked_local_model()
+                if locked_model:
+                    logger.debug(f"Using locked local model: {locked_model}")
 
             # Bind tools to model
             model_with_tools = model.bind_tools(self.tools)
 
-            # Invoke model
+            # Get messages
             messages = state.get("messages", [])
             if not messages:
                 messages = [HumanMessage(content=state["query"])]
 
+            # Apply memory management - truncate if needed
+            if model_tier == "remote":
+                model_id = self.llm_system.get_locked_remote_model() or self.llm_system.get_current_remote_model()
+            else:
+                model_id = self.llm_system.get_locked_local_model() or self.llm_system._current_local_model
+
+            if model_id:
+                managed_messages = self.memory_manager.manage_context(messages, model_id, model_tier)
+                if len(managed_messages) < len(messages):
+                    logger.info(f"Context managed: {len(messages)} → {len(managed_messages)} messages")
+                messages = managed_messages
+
+            # Invoke model
             response = await model_with_tools.ainvoke(messages)
 
             # Update state
@@ -204,10 +254,29 @@ class HybridAgent:
             if model_tier == "remote":
                 model_name = self.llm_system.get_current_remote_model()
                 state["model_used"] = f"remote ({model_name})"
+                logger.debug(f"✓ Successful response from remote model: {model_name}")
+
+                # Update status overlay
+                try:
+                    from ..gui.status_overlay import update_status
+                    models = self.llm_system.get_available_remote_models()
+                    model_info = next((m for m in models if m['id'] == model_name), None)
+                    name = model_info['name'] if model_info else model_name
+                    update_status(f"✓ Response complete\n{name}", '#00ff00')
+                except Exception:
+                    pass
             else:
                 # For local, track the actual model that was used
                 local_model_name = self.llm_system._current_local_model or "unknown"
                 state["model_used"] = f"local ({local_model_name})"
+                logger.debug(f"✓ Successful response from local model: {local_model_name}")
+
+                # Update status overlay
+                try:
+                    from ..gui.status_overlay import update_status
+                    update_status(f"✓ Response complete\n{local_model_name}", '#00ff00')
+                except Exception:
+                    pass
 
             state["error"] = None
 
@@ -221,6 +290,17 @@ class HybridAgent:
             logger.error(f"Execution failed with {model_tier}: {e}")
             state["error"] = str(e)
             state["retry_count"] = state.get("retry_count", 0) + 1
+
+            # Unlock the failed model and try to find a new one
+            logger.warning(f"⚠️  Locked {model_tier} model failed, will unlock and retest")
+            self.llm_system.unlock_model(model_tier)
+
+            # Update status overlay
+            try:
+                from ..gui.status_overlay import update_status
+                update_status(f"⚠️ Model failed\nFinding alternative...", '#ff4444')
+            except Exception:
+                pass
 
         return state
 

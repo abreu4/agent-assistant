@@ -23,6 +23,11 @@ class HybridLLMSystem:
         self._remote_model: Optional[BaseChatModel] = None
         self._classifier_model: Optional[BaseChatModel] = None
         self._current_local_model: Optional[str] = None  # Track current local model
+        self._current_remote_model: Optional[str] = None  # Track current remote model
+
+        # Track locked models (simplified single-mode system)
+        self._locked_local_model: Optional[str] = None
+        self._locked_remote_model: Optional[str] = None
 
         self._setup_models()
 
@@ -69,13 +74,24 @@ class HybridLLMSystem:
             model_id: Model ID to check
 
         Returns:
-            Provider name ('openrouter', 'moonshot', 'anthropic', 'google', 'groq')
+            Provider name ('openrouter', 'moonshot', 'anthropic', 'google', 'groq', 'openai')
         """
         remote_config = config.get_llm_config('remote')
-        available_models = remote_config.get('available_models', [])
+        all_models = remote_config.get('available_models', [])
+
+        # Handle new dict format (with modes) or old list format
+        models_to_check = []
+        if isinstance(all_models, dict):
+            # New format: combine all models from all modes
+            for mode_models in all_models.values():
+                if isinstance(mode_models, list):
+                    models_to_check.extend(mode_models)
+        elif isinstance(all_models, list):
+            # Old format: flat list
+            models_to_check = all_models
 
         # Check if model has explicit provider field
-        for model in available_models:
+        for model in models_to_check:
             if model['id'] == model_id:
                 return model.get('provider', 'openrouter')
 
@@ -114,6 +130,7 @@ class HybridLLMSystem:
 
         # Determine base URL based on provider
         base_url_mapping = {
+            'openai': remote_config.get('openai_base', 'https://api.openai.com/v1'),
             'openrouter': remote_config.get('openrouter_base', 'https://openrouter.ai/api/v1'),
             'moonshot': remote_config.get('moonshot_base', 'https://api.moonshot.cn/v1'),
             'anthropic': remote_config.get('anthropic_base', 'https://api.anthropic.com'),
@@ -176,11 +193,19 @@ class HybridLLMSystem:
 
     def _select_random_local_model(self) -> str:
         """
-        Select a random local model from available models based on current mode.
+        Select a random local model from available models.
+        If sticky_model is enabled and a successful model is tracked, use it.
 
         Returns:
             Model ID to use
         """
+        # Check if sticky model is enabled and we have a last successful model
+        if config.get_sticky_model_enabled():
+            last_successful = config.get_last_successful_model('local')
+            if last_successful:
+                logger.debug(f"Using sticky model: {last_successful}")
+                return last_successful
+
         local_config = config.get_llm_config('local')
         random_selection = local_config.get('random_selection', False)
 
@@ -188,25 +213,19 @@ class HybridLLMSystem:
             # Return default model
             return local_config.get('model', 'llama3.1:8b')
 
-        # Get current mode (default or code)
-        mode = local_config.get('mode', 'default')
+        # Get available models
+        available_models = local_config.get('available_models', [])
 
-        # Get available models for current mode
-        all_models = local_config.get('available_models', {})
-
-        if isinstance(all_models, dict):
-            # New format with modes
-            available_models = all_models.get(mode, all_models.get('default', []))
-        else:
-            # Old format (list) - use directly
-            available_models = all_models
+        # Handle old dict format with modes (backwards compatibility)
+        if isinstance(available_models, dict):
+            available_models = available_models.get('default', [])
 
         if not available_models:
             return local_config.get('model', 'llama3.1:8b')
 
         # Select random model
         selected = random.choice(available_models)
-        logger.debug(f"Randomly selected local model ({mode} mode): {selected['name']}")
+        logger.debug(f"Randomly selected local model: {selected['name']}")
         return selected['id']
 
     def _create_local_model(self, model_id: str) -> BaseChatModel:
@@ -228,7 +247,7 @@ class HybridLLMSystem:
 
     def get_model(self, tier: ModelTier) -> BaseChatModel:
         """
-        Get model for specific tier.
+        Get model for specific tier (uses locked model from warmup).
 
         Args:
             tier: 'local' or 'remote'
@@ -237,28 +256,33 @@ class HybridLLMSystem:
             Language model instance
 
         Raises:
-            ValueError: If model not configured
+            ValueError: If model not configured or not locked
         """
         if tier == "local":
             if not self._local_model:
                 raise ValueError("Local model not configured")
 
-            # Check if we should randomly select a different model
-            local_config = config.get_llm_config('local')
-            if local_config.get('random_selection', False):
-                # Select random model for this request
-                new_model_id = self._select_random_local_model()
-
-                # Only recreate if different from current
-                if new_model_id != self._current_local_model:
-                    self._current_local_model = new_model_id
-                    self._local_model = self._create_local_model(new_model_id)
-                    logger.info(f"🎲 Switched to local model: {new_model_id}")
+            # Use locked model if available
+            if self._locked_local_model:
+                # Ensure we're using the locked model
+                if self._current_local_model != self._locked_local_model:
+                    self._current_local_model = self._locked_local_model
+                    self._local_model = self._create_local_model(self._locked_local_model)
+                    logger.debug(f"Using locked local model: {self._locked_local_model}")
 
             return self._local_model
+
         elif tier == "remote":
             if not self._remote_model:
                 raise ValueError("Remote model not configured. Check API key in .env")
+
+            # Use locked model if available
+            if self._locked_remote_model:
+                if self._current_remote_model != self._locked_remote_model:
+                    logger.debug(f"Using locked remote model: {self._locked_remote_model}")
+                    self.switch_remote_model(self._locked_remote_model)
+                    self._current_remote_model = self._locked_remote_model
+
             return self._remote_model
         else:
             raise ValueError(f"Unknown tier: {tier}")
@@ -277,27 +301,191 @@ class HybridLLMSystem:
         return self._classifier_model
 
     async def warmup(self):
-        """Warm up local models on startup to reduce first-request latency."""
+        """
+        Warm up and test models to lock into working ones.
+
+        Tests models during startup to find working ones for each tier,
+        then locks into them for consistent performance.
+        """
+        logger.info("🔧 Starting model warmup and testing...")
+
+        # Test and lock models
+        await self._warmup_and_lock_local()
+        await self._warmup_and_lock_remote()
+
+        logger.info("✓ Warmup complete")
+
+    async def _warmup_and_lock_local(self):
+        """
+        Test local models and lock into a working one.
+        """
         if not self._local_model:
             logger.debug("No local models to warm up")
             return
 
-        logger.debug("Warming up local models...")
-        warmup_prompt = "Hello"
+        # Check if we have a sticky model from previous session
+        if config.get_sticky_model_enabled():
+            sticky_model = config.get_last_successful_model('local')
+            if sticky_model:
+                logger.info(f"🎯 Found sticky local model: {sticky_model}")
+                # Test if it works
+                if await self._test_local_model(sticky_model):
+                    self._locked_local_model = sticky_model
+                    logger.info(f"✓ Locked into local model: {sticky_model}")
+                    return
+                else:
+                    logger.warning(f"⚠️  Sticky model {sticky_model} failed, testing alternatives")
 
+        # Get available models
+        local_config = config.get_llm_config('local')
+        available_models = local_config.get('available_models', [])
+
+        # Handle old dict format with modes (backwards compatibility)
+        if isinstance(available_models, dict):
+            available_models = available_models.get('default', [])
+
+        if not available_models:
+            logger.warning("No available local models configured")
+            return
+
+        # Test in order (priority is already set in config)
+        test_models = available_models.copy()
+
+        logger.info(f"🔍 Testing {len(test_models)} local models...")
+
+        # Test each model until we find one that works
+        for idx, model_info in enumerate(test_models, 1):
+            model_id = model_info['id']
+            model_name = model_info['name']
+
+            logger.debug(f"  Testing {model_name}...")
+
+            if await self._test_local_model(model_id):
+                self._locked_local_model = model_id
+                logger.info(f"✓ Locked into local model: {model_name} ({model_id})")
+
+                # Save as sticky model
+                if config.get_sticky_model_enabled():
+                    config.set_last_successful_model('local', model_id)
+
+                return
+
+        logger.error("❌ No working local models found!")
+
+    async def _warmup_and_lock_remote(self):
+        """
+        Test remote models and lock into a working one.
+        """
+        if not self._remote_model:
+            logger.debug("No remote model configured")
+            return
+
+        # Check if we have a sticky model from previous session
+        if config.get_sticky_model_enabled():
+            sticky_model = config.get_last_successful_model('remote')
+            if sticky_model:
+                logger.info(f"🎯 Found sticky remote model: {sticky_model}")
+                # Test if it works
+                if await self._test_remote_model(sticky_model):
+                    self._locked_remote_model = sticky_model
+                    logger.info(f"✓ Locked into remote model: {sticky_model}")
+                    return
+                else:
+                    logger.warning(f"⚠️  Sticky model {sticky_model} failed, testing alternatives")
+
+        # Get available remote models
+        remote_config = config.get_llm_config('remote')
+        available_models = remote_config.get('available_models', [])
+
+        # Handle old dict format with modes (backwards compatibility)
+        if isinstance(available_models, dict):
+            available_models = available_models.get('default', [])
+
+        if not available_models:
+            logger.warning("No available remote models configured")
+            return
+
+        # Test in order (priority is already set in config)
+        test_models = available_models.copy()
+
+        logger.info(f"🔍 Testing {len(test_models)} remote models...")
+
+        # Test each model until we find one that works
+        for idx, model_info in enumerate(test_models, 1):
+            model_id = model_info['id']
+            model_name = model_info['name']
+
+            logger.debug(f"  Testing {model_name}...")
+
+            if await self._test_remote_model(model_id):
+                self._locked_remote_model = model_id
+                logger.info(f"✓ Locked into remote model: {model_name} ({model_id})")
+
+                # Save as sticky model
+                if config.get_sticky_model_enabled():
+                    config.set_last_successful_model('remote', model_id)
+
+                return
+
+        logger.error("❌ No working remote models found!")
+
+    async def _test_local_model(self, model_id: str) -> bool:
+        """
+        Test if a local model works.
+
+        Args:
+            model_id: Model ID to test
+
+        Returns:
+            True if model responds successfully
+        """
         try:
-            # Warm up main local model
-            tasks = [self._local_model.ainvoke(warmup_prompt)]
+            # Create a test instance
+            test_model = self._create_local_model(model_id)
 
-            # Warm up classifier if different
-            if self._classifier_model:
-                tasks.append(self._classifier_model.ainvoke(warmup_prompt))
+            # Simple test prompt
+            response = await test_model.ainvoke("Hi")
 
-            await asyncio.gather(*tasks, return_exceptions=True)
-            logger.debug("Local models warmed up successfully")
+            # Check if we got a valid response
+            if response and hasattr(response, 'content') and response.content:
+                logger.debug(f"    ✓ {model_id} responded successfully")
+                return True
+
+            return False
 
         except Exception as e:
-            logger.warning(f"Failed to warm up models: {e}")
+            logger.debug(f"    ✗ {model_id} failed: {e}")
+            return False
+
+    async def _test_remote_model(self, model_id: str) -> bool:
+        """
+        Test if a remote model works.
+
+        Args:
+            model_id: Model ID to test
+
+        Returns:
+            True if model responds successfully
+        """
+        try:
+            # Switch to the model we want to test
+            current = self.get_current_remote_model()
+            if current != model_id:
+                self.switch_remote_model(model_id)
+
+            # Simple test prompt
+            response = await self._remote_model.ainvoke("Hi")
+
+            # Check if we got a valid response
+            if response and hasattr(response, 'content') and response.content:
+                logger.debug(f"    ✓ {model_id} responded successfully")
+                return True
+
+            return False
+
+        except Exception as e:
+            logger.debug(f"    ✗ {model_id} failed: {e}")
+            return False
 
     def is_local_available(self) -> bool:
         """Check if local model is available."""
@@ -369,3 +557,95 @@ class HybridLLMSystem:
         """
         config.set_remote_model(model_id)
         self.reload_remote_model()
+
+    def get_preferred_remote_model(self) -> str:
+        """
+        Get the preferred remote model (sticky or current).
+
+        Returns:
+            Model ID to use
+        """
+        # Check if sticky model is enabled and we have a last successful model
+        if config.get_sticky_model_enabled():
+            last_successful = config.get_last_successful_model('remote')
+            if last_successful:
+                logger.debug(f"Using sticky remote model: {last_successful}")
+                return last_successful
+
+        # Return current configured model
+        return self.get_current_remote_model()
+
+    def get_locked_model(self, tier: ModelTier) -> Optional[str]:
+        """
+        Get the currently locked model for a tier.
+
+        Args:
+            tier: 'local' or 'remote'
+
+        Returns:
+            Model ID or None if not locked
+        """
+        if tier == 'local':
+            return self._locked_local_model
+        elif tier == 'remote':
+            return self._locked_remote_model
+        return None
+
+    def get_locked_local_model(self) -> Optional[str]:
+        """
+        Get the currently locked local model (backwards compatible helper).
+
+        Returns:
+            Model ID or None if not locked
+        """
+        return self._locked_local_model
+
+    def get_locked_remote_model(self) -> Optional[str]:
+        """
+        Get the currently locked remote model (backwards compatible helper).
+
+        Returns:
+            Model ID or None if not locked
+        """
+        return self._locked_remote_model
+
+    def get_all_locked_models(self) -> dict:
+        """
+        Get all locked models.
+
+        Returns:
+            Dict with tier keys and model IDs
+        """
+        return {
+            'local': self._locked_local_model,
+            'remote': self._locked_remote_model
+        }
+
+    def unlock_model(self, tier: ModelTier):
+        """
+        Unlock a model tier to allow retesting.
+
+        Args:
+            tier: 'local' or 'remote'
+        """
+        if tier == 'local':
+            if self._locked_local_model:
+                logger.info(f"🔓 Unlocking local model: {self._locked_local_model}")
+                self._locked_local_model = None
+        elif tier == 'remote':
+            if self._locked_remote_model:
+                logger.info(f"🔓 Unlocking remote model: {self._locked_remote_model}")
+                self._locked_remote_model = None
+
+    async def relock_model(self, tier: ModelTier):
+        """
+        Re-test and lock into a working model after failure.
+
+        Args:
+            tier: 'local' or 'remote'
+        """
+        logger.info(f"🔄 Re-testing {tier} models after failure...")
+        if tier == "local":
+            await self._warmup_and_lock_local()
+        elif tier == "remote":
+            await self._warmup_and_lock_remote()

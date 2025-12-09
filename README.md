@@ -5,30 +5,31 @@ A powerful hybrid local+remote AI assistant with dual interfaces (CLI + GUI), in
 ## 🌟 Key Features
 
 ### Multiple Interfaces
-- **CLI Mode**: Interactive command-line interface with streaming output (like Claude)
+- **CLI Mode**: Interactive command-line interface with streaming output
 - **GUI Mode**: Hotkey-triggered popup (`Ctrl+Alt+Space`) for quick queries
 - **Graceful Fallback**: Automatically falls back to CLI if hotkey setup fails
 
 ### Hybrid LLM Architecture
 - **Local Models** (via Ollama): Privacy-focused, free, fast
-  - Random selection from 6 general-purpose models OR
-  - 5 specialized coding models
-  - Switch modes on-the-fly: `mode code` / `mode default`
-- **Remote Models**: Access to 17+ models across 5 providers
+  - Random selection from 6 general-purpose models
+  - Llama 3.1, Llama 3.2, Mistral, Phi-3, Gemma 2, Qwen 2.5
+- **Remote Models**: Access to 22+ models across 6 providers
   - OpenRouter (10+ free models)
+  - OpenAI (GPT-4, GPT-4o, GPT-3.5)
   - Anthropic (Claude 3.5)
   - Google AI (Gemini)
   - Groq (ultra-fast inference)
   - Moonshot AI (Kimi K2)
 - **Smart Routing**: Auto-routes based on complexity (simple → local, complex → remote)
 - **Multi-Model Retry**: Tries 3 different remote models before falling back to local
+- **Sticky Model**: Remembers last successful model for consistent performance
 
 ### Model Management
-- **Mode Switching**: `mode default` (general) / `mode code` (programming)
 - **Random Selection**: Different local model for each query (optional)
 - **Model Forcing**: `local` / `remote` / `auto` commands
 - **Model Switching**: `switch <number>` to change remote model
-- **Live Status**: `models`, `current`, `showmode` commands
+- **Live Status**: `models`, `current`, `sticky` commands
+- **Reset Preferences**: `reset-sticky` to clear model preferences
 
 ### Agent Capabilities
 - File operations (read, write, search)
@@ -200,11 +201,12 @@ The service starts in CLI mode (no root required):
 🤖 Agent Assistant - Interactive CLI
 ============================================================
 💬 Type your message, or use commands:
-   • mode default / mode code - Switch model modes
    • models - List all available models
    • switch <number> - Switch remote model
    • local / remote / auto - Force model tier
-   • showmode / current - Show current settings
+   • sticky - Show sticky model status
+   • reset-sticky - Reset model preferences
+   • current - Show current settings
    • exit / quit / q - Exit
 ============================================================
 
@@ -214,11 +216,8 @@ The service starts in CLI mode (no root required):
 **Try these commands:**
 
 ```bash
-# Ask a question (uses auto-routing)
+# Ask a question (uses local by default)
 ❯ What is Python?
-
-# Switch to code mode
-❯ mode code
 
 # Ask for code
 ❯ Write a binary search function
@@ -226,9 +225,12 @@ The service starts in CLI mode (no root required):
 # List all models
 ❯ models
 
-# Force local model
-❯ local
-❯ Explain quantum computing
+# Allow auto routing
+❯ auto
+❯ Explain quantum computing in detail
+
+# Check sticky models
+❯ sticky
 
 # Exit
 ❯ exit
@@ -261,14 +263,13 @@ python3 run_service.py
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `mode default` | Switch to general-purpose models | Uses Llama, Mistral, Gemma |
-| `mode code` | Switch to coding models | Uses CodeLlama, DeepSeek Coder |
-| `showmode` | Show current mode | Displays DEFAULT or CODE |
 | `models` | List all available models | Shows local + remote |
 | `switch <N>` | Switch to remote model N | `switch 5` |
 | `current` | Show current remote model | |
-| `local` | Force next query to local | One-time override |
-| `remote` | Force next query to remote | One-time override |
+| `sticky` | Show sticky model status | Displays locked models |
+| `reset-sticky` | Reset model preferences | Clear sticky models |
+| `local` | Force local model tier | Uses Ollama models |
+| `remote` | Force remote model tier | Uses API models |
 | `auto` | Re-enable auto routing | Default behavior |
 | `exit`, `quit`, `q` | Exit CLI | |
 | `Ctrl+C`, `Ctrl+Z` | Stop service | With goodbye message |
@@ -279,14 +280,11 @@ python3 run_service.py
 ```bash
 ❯ python3 run_service.py
 
-❯ mode code
-✓ Switched to CODE mode
-
 ❯ Write a Python function to sort a list
-🎲 Switched to local model: codellama:7b
+🎲 Switched to local model: llama3.1:8b
 
 ============================================================
-🤖 Response (model: local (codellama:7b))
+🤖 Response (model: local (llama3.1:8b))
 ============================================================
 Here's a Python function using the built-in sorted() function:
 
@@ -300,11 +298,12 @@ sorted_numbers = sort_list(numbers)
 print(sorted_numbers)  # [11, 12, 22, 25, 34, 64, 90]
 ============================================================
 
-❯ mode default
-✓ Switched to DEFAULT mode
+❯ sticky
+📌 Model Lock Status
+  💻 Local : ✓ llama3.1:8b
+  🌐 Remote: ✓ mistralai/mistral-small-3.1-24b-instruct:free
 
 ❯ What is machine learning?
-🎲 Switched to local model: llama3.1:8b
 
 ============================================================
 🤖 Response (model: local (llama3.1:8b))
@@ -414,13 +413,14 @@ tools:
 
 The agent automatically routes queries based on complexity:
 
-| Complexity | Examples | Model Used |
+| Complexity | Examples | Model Used (with auto routing) |
 |------------|----------|------------|
 | **Simple** | "Hello", "What is X?", definitions | Local (Llama 3.1 8B) |
 | **Medium** | Explanations, summaries | Local (Llama 3.1 8B) |
-| **Complex** | Deep analysis, reasoning, multi-step | Remote (Kimi K2) |
-| **Code** | Programming tasks | Local (unless tools needed) |
+| **Complex** | Deep analysis, reasoning, multi-step | Remote (if enabled) |
 | **Tool-heavy** | Needs search, execution, files | Remote (better reliability) |
+
+**Note**: Default configuration uses `force_model: local` to prioritize local models.
 
 ### Cost Optimization
 
@@ -665,11 +665,14 @@ tools.append(my_custom_tool)
 
 **Q: Can I use a different local model?**
 
-A: Yes! Edit `config/config.yaml`:
+A: Yes! Edit `config/config.yaml` and modify the `available_models` list:
 ```yaml
 llm:
   local:
-    model: "qwen2.5:7b"  # Or any Ollama model
+    available_models:
+    - id: qwen2.5:7b
+      name: Qwen 2.5 7B
+      # ... add your preferred model
 ```
 
 **Q: Can I use a different remote model?**
@@ -688,6 +691,15 @@ A: Edit `config/config.yaml`:
 tools:
   code_execution:
     enabled: false
+```
+
+**Q: How do I use remote models instead of local?**
+
+A: Set `force_model: auto` or `force_model: remote` in `config/config.yaml`:
+```yaml
+llm:
+  routing:
+    force_model: auto  # or "remote" to always use API models
 ```
 
 **Q: Can I change the hotkey?**

@@ -85,12 +85,13 @@ class Config:
         Get API key for specific provider.
 
         Args:
-            provider: Provider name ('openrouter', 'moonshot', 'anthropic', 'google', 'groq', 'tavily')
+            provider: Provider name ('openai', 'openrouter', 'moonshot', 'anthropic', 'google', 'groq', 'tavily')
 
         Returns:
             API key or None
         """
         key_mapping = {
+            'openai': 'OPENAI_API_KEY',
             'openrouter': 'OPENROUTER_API_KEY',
             'moonshot': 'MOONSHOT_API_KEY',
             'anthropic': 'ANTHROPIC_API_KEY',
@@ -121,16 +122,15 @@ class Config:
         """
         Get agent workspace directory.
 
+        Returns current working directory where the agent is run from.
+        This allows the agent to work on the repository it's installed in.
+
         Returns:
-            Path to workspace directory
+            Path to current working directory
         """
-        workspace_dir = self.get('agent.workspace_dir', '/home/tiago/agent_workspace')
-        path = Path(workspace_dir).expanduser()
-
-        # Create if doesn't exist
-        path.mkdir(parents=True, exist_ok=True)
-
-        return path
+        # Use current working directory as workspace
+        # This allows the agent to work on the repo it's run from
+        return Path.cwd()
 
     @property
     def monthly_budget(self) -> float:
@@ -141,11 +141,6 @@ class Config:
     def prefer_local(self) -> bool:
         """Whether to prefer local models when possible."""
         return bool(self.get('llm.routing.prefer_local', True))
-
-    @property
-    def hotkey_combination(self) -> str:
-        """Get hotkey combination."""
-        return self.get('hotkey.combination', 'ctrl+alt+space')
 
     def get_available_remote_models(self) -> list:
         """
@@ -191,38 +186,81 @@ class Config:
 
     def get_local_mode(self) -> str:
         """
-        Get current local model mode.
+        Get current local model mode (simplified - always returns 'default').
 
         Returns:
-            Mode string ("default" or "code")
+            Mode string (always "default" in simplified single-mode system)
         """
-        return self.get('llm.local.mode', 'default')
+        return 'default'
 
     def set_local_mode(self, mode: str):
         """
-        Set local model mode.
+        Set local model mode (no-op in simplified single-mode system).
 
         Args:
-            mode: Mode to set ("default" or "code")
+            mode: Mode to set (ignored)
 
-        Raises:
-            ValueError: If mode is not valid
+        Note:
+            This method is kept for backwards compatibility but does nothing
+            in the simplified single-mode system.
         """
-        if mode not in ['default', 'code']:
-            raise ValueError(f"Invalid mode: {mode}. Must be 'default' or 'code'")
-
-        # Update in-memory config
-        self.config['llm']['local']['mode'] = mode
-
-        # Persist to file
-        config_path = Path(__file__).parent.parent.parent / "config" / "config.yaml"
-        with open(config_path, 'w') as f:
-            yaml.dump(self.config, f, default_flow_style=False, sort_keys=False)
+        # No-op: single-mode system doesn't use modes
+        pass
 
     def reload(self):
         """Reload configuration from files."""
         self._load_env()
         self._load_yaml()
+
+    def get_sticky_model_enabled(self) -> bool:
+        """
+        Check if sticky model behavior is enabled.
+
+        Returns:
+            True if sticky model is enabled
+        """
+        return bool(self.get('llm.routing.sticky_model', True))
+
+    def get_last_successful_model(self, mode_key: str) -> Optional[str]:
+        """
+        Get the last successful model for a mode.
+
+        Args:
+            mode_key: Mode key like 'local_default', 'local_code', 'remote_default', 'remote_code'
+                      OR legacy tier like 'local' or 'remote' (for backwards compatibility)
+
+        Returns:
+            Model ID or None
+        """
+        # Backwards compatibility: if mode_key doesn't contain underscore, treat as legacy tier
+        if '_' not in mode_key:
+            return self.get(f'llm.routing.last_successful_{mode_key}_model')
+
+        return self.get(f'llm.routing.last_successful_{mode_key}_model')
+
+    def set_last_successful_model(self, mode_key: str, model_id: str):
+        """
+        Set the last successful model for a mode.
+
+        Args:
+            mode_key: Mode key like 'local_default', 'local_code', 'remote_default', 'remote_code'
+                      OR legacy tier like 'local' or 'remote' (for backwards compatibility)
+            model_id: Model ID that succeeded
+        """
+        # Backwards compatibility: if mode_key doesn't contain underscore, treat as legacy tier
+        config_key = f'last_successful_{mode_key}_model'
+
+        # Ensure routing section exists
+        if 'routing' not in self.config['llm']:
+            self.config['llm']['routing'] = {}
+
+        # Update in-memory config
+        self.config['llm']['routing'][config_key] = model_id
+
+        # Persist to file
+        config_path = Path(__file__).parent.parent.parent / "config" / "config.yaml"
+        with open(config_path, 'w') as f:
+            yaml.dump(self.config, f, default_flow_style=False, sort_keys=False)
 
 
 # Global config instance

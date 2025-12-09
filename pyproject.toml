@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-assistant"
+version = "1.0.0"
+description = "Hybrid AI Assistant with intelligent routing and workspace awareness"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Agent Assistant Contributors"}
+]
+keywords = ["ai", "llm", "agent", "assistant", "langchain", "langgraph"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "langchain>=0.1.0",
+    "langchain-community>=0.0.20",
+    "langchain-core>=0.1.0",
+    "langchain-ollama>=0.1.0",
+    "langchain-openai>=0.0.5",
+    "langgraph>=0.0.20",
+    "chromadb>=0.4.22",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0",
+    "duckduckgo-search>=4.0.0",
+    "docker>=7.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+anthropic = [
+    "langchain-anthropic>=0.1.0",
+]
+google = [
+    "langchain-google-genai>=0.0.5",
+]
+
+[project.scripts]
+agent-assistant = "agent_assistant.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/agent-assistant"
+Repository = "https://github.com/yourusername/agent-assistant"
+Issues = "https://github.com/yourusername/agent-assistant/issues"
+
+[tool.setuptools]
+package-dir = {"agent_assistant" = "src"}
+packages = ["agent_assistant"]
+
+[tool.setuptools.package-data]
+agent_assistant = ["../config/*.yaml", "../.env.example"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

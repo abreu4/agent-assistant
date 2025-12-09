@@ -16,7 +16,6 @@ class TaskComplexity(str, Enum):
     SIMPLE = "simple"
     MEDIUM = "medium"
     COMPLEX = "complex"
-    CODE = "code"
 
 
 class TaskClassification(BaseModel):
@@ -53,14 +52,14 @@ class Router:
 
 **Complexity Levels:**
 - **simple**: Greetings, basic facts, simple definitions, quick questions (< 100 tokens output)
-- **medium**: General questions, explanations, summaries, basic analysis (100-500 tokens)
-- **complex**: Deep analysis, multi-step reasoning, creative writing, detailed reports (> 500 tokens)
-- **code**: Programming tasks, debugging, technical implementation, code generation
+- **medium**: Job searches, email queries, document summaries, basic analysis (100-500 tokens)
+- **complex**: Detailed job analysis, professional email drafting, cover letter generation, multi-step research (> 500 tokens)
 
 **Consider:**
-1. Does this need external tools? (web search, calculator, file access, etc.)
+1. Does this need external tools? (email search, document search, web search, etc.)
 2. How many output tokens will likely be needed?
-3. Does it require advanced reasoning or just fact recall?
+3. Is this about job applications, emails, or documents?
+4. Does it require advanced reasoning or just information retrieval?
 
 Respond with your classification."""),
             ("human", "{query}")
@@ -114,13 +113,13 @@ Respond with your classification."""),
             complexity = TaskComplexity.SIMPLE
             estimated_tokens = 50
 
-        # Code patterns
-        elif any(kw in query_lower for kw in ['code', 'function', 'debug', 'implement', 'script', 'program']):
-            complexity = TaskComplexity.CODE
-            estimated_tokens = 300
+        # Complex patterns (job-related professional writing)
+        elif any(kw in query_lower for kw in ['draft', 'write', 'compose', 'cover letter', 'application']):
+            complexity = TaskComplexity.COMPLEX
+            estimated_tokens = 600
 
-        # Complex patterns
-        elif length > 50 or any(kw in query_lower for kw in ['analyze', 'explain in detail', 'compare', 'evaluate', 'design', 'create a']):
+        # Complex patterns (analysis and research)
+        elif length > 50 or any(kw in query_lower for kw in ['analyze', 'explain in detail', 'compare', 'evaluate', 'research']):
             complexity = TaskComplexity.COMPLEX
             estimated_tokens = 800
 
@@ -131,7 +130,7 @@ Respond with your classification."""),
 
         # Check for tool requirements
         requires_tools = any(kw in query_lower for kw in [
-            'search', 'find', 'look up', 'browse', 'calculate', 'run', 'execute', 'file'
+            'search', 'find', 'look up', 'browse', 'email', 'job', 'document', 'file'
         ])
 
         return TaskClassification(
@@ -153,10 +152,9 @@ Respond with your classification."""),
         Routing Strategy:
         1. Simple tasks → Local (fast, free)
         2. Medium tasks → Local first
-        3. Complex reasoning → Remote (better quality)
-        4. Code tasks → Local if no tools, else consider remote
-        5. Long context (> 1000 tokens) → Remote
-        6. Tool-heavy tasks → Remote (better reliability)
+        3. Complex reasoning/writing → Remote (better quality)
+        4. Long context (> 1000 tokens) → Remote
+        5. Tool-heavy tasks → Remote (better reliability)
 
         Args:
             classification: Task classification
