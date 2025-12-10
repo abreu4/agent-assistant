@@ -190,6 +190,15 @@ job_agent:
     check_interval_minutes: 30
     max_emails_per_sync: 100
     index_on_startup: true
+    # Account storage (per-account tokens + registry)
+    accounts_dir: ~/.job_agent/accounts
+    accounts_registry: ~/.job_agent/accounts.json
+    # Email index (per-account subdirs)
+    email_index_path: ~/.job_agent/email_index
+    # Gmail API settings
+    scopes:
+      - https://www.googleapis.com/auth/gmail.readonly
+    query_filter: "newer_than:30d"  # Last 30 days
   tracking:
     database_path: ~/.job_agent/jobs.db
     auto_extract_metadata: true
