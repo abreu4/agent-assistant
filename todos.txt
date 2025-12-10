@@ -1,2 +1,6 @@
+implementation:
+phase 2 - Remove the credential based setup altogether, just keep the browser based
 continue with transf plan
+
+cleanup:
 remove deprecated docs in docs/

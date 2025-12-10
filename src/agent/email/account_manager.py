@@ -1,6 +1,7 @@
 """Multi-account Gmail management system."""
 
 import json
+import os
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
@@ -140,11 +141,21 @@ class AccountManager:
         from google_auth_oauthlib.flow import InstalledAppFlow
         from googleapiclient.discovery import build
 
-        # Embedded OAuth credentials
+        # OAuth credentials from environment
+        client_id = os.getenv('GMAIL_CLIENT_ID')
+        client_secret = os.getenv('GMAIL_CLIENT_SECRET')
+
+        if not client_id or not client_secret:
+            raise ValueError(
+                "Gmail OAuth credentials not configured!\n"
+                "Please set GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET in your .env file.\n"
+                "Get credentials from: https://console.cloud.google.com"
+            )
+
         EMBEDDED_CLIENT_CONFIG = {
             "installed": {
-                "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
-                "client_secret": "YOUR_CLIENT_SECRET",
+                "client_id": client_id,
+                "client_secret": client_secret,
                 "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                 "token_uri": "https://oauth2.googleapis.com/token",
                 "redirect_uris": ["http://localhost"]

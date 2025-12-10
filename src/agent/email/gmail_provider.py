@@ -1,6 +1,7 @@
 """Gmail OAuth2 provider implementation with embedded credentials and multi-account support."""
 
 import base64
+import os
 import pickle
 from pathlib import Path
 from typing import List, Optional
@@ -20,16 +21,34 @@ from src.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-# Embedded OAuth credentials (no user setup needed!)
-EMBEDDED_CLIENT_CONFIG = {
-    "installed": {
-        "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
-        "client_secret": "YOUR_CLIENT_SECRET",
-        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        "token_uri": "https://oauth2.googleapis.com/token",
-        "redirect_uris": ["http://localhost"]
+def _get_oauth_config() -> dict:
+    """Get OAuth configuration from environment variables.
+
+    Returns:
+        dict: OAuth client configuration
+
+    Raises:
+        ValueError: If credentials not configured in .env
+    """
+    client_id = os.getenv('GMAIL_CLIENT_ID')
+    client_secret = os.getenv('GMAIL_CLIENT_SECRET')
+
+    if not client_id or not client_secret:
+        raise ValueError(
+            "Gmail OAuth credentials not configured!\n"
+            "Please set GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET in your .env file.\n"
+            "Get credentials from: https://console.cloud.google.com"
+        )
+
+    return {
+        "installed": {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": ["http://localhost"]
+        }
     }
-}
 
 
 class GmailProvider(EmailProvider):
@@ -98,7 +117,7 @@ class GmailProvider(EmailProvider):
                     # Use embedded credentials (no file needed!)
                     logger.info(f"Starting OAuth flow for {self.account_email}...")
                     flow = InstalledAppFlow.from_client_config(
-                        EMBEDDED_CLIENT_CONFIG,
+                        _get_oauth_config(),
                         self.scopes
                     )
 

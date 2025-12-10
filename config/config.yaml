@@ -45,7 +45,7 @@ llm:
     random_selection: true
   remote:
     provider: openrouter
-    model: mistralai/mistral-small-3.1-24b-instruct:free
+    model: nousresearch/deephermes-3-llama-3-8b-preview:free
     temperature: 0.6
     max_tokens: 4096
     openai_base: https://api.openai.com/v1
@@ -170,7 +170,7 @@ llm:
     prefer_local: true
     cost_limit_monthly: 50
     complexity_threshold: medium
-    force_model: local  # Force local by default for job agent
+    force_model: local
     sticky_model: true
     last_successful_local_model: llama3.1:8b
     last_successful_remote_model: mistralai/mistral-small-3.1-24b-instruct:free
@@ -190,15 +190,12 @@ job_agent:
     check_interval_minutes: 30
     max_emails_per_sync: 100
     index_on_startup: true
-    # Account storage (per-account tokens + registry)
     accounts_dir: ~/.job_agent/accounts
     accounts_registry: ~/.job_agent/accounts.json
-    # Email index (per-account subdirs)
     email_index_path: ~/.job_agent/email_index
-    # Gmail API settings
     scopes:
-      - https://www.googleapis.com/auth/gmail.readonly
-    query_filter: "newer_than:30d"  # Last 30 days
+    - https://www.googleapis.com/auth/gmail.readonly
+    query_filter: newer_than:30d
   tracking:
     database_path: ~/.job_agent/jobs.db
     auto_extract_metadata: true
