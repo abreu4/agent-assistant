@@ -152,6 +152,12 @@ class AgentService:
         # Setup signal handlers
         self.setup_signal_handlers()
 
+        # Check if accounts exist (required for email functionality)
+        if not self._check_accounts():
+            # User refused to add account, exit gracefully
+            self.logger.info("Service stopped: No email accounts configured")
+            return
+
         try:
             # Start task processor thread
             self.task_thread = Thread(target=self.process_tasks, daemon=False)
@@ -199,6 +205,10 @@ class AgentService:
         print(f"  {YELLOW}current{RESET}          - Show current remote model")
         print(f"  {YELLOW}sticky{RESET}           - Show sticky model status")
         print(f"  {YELLOW}reset-sticky{RESET}     - Reset sticky model preferences")
+        print(f"  {YELLOW}accounts{RESET}         - List all configured email accounts")
+        print(f"  {YELLOW}account add{RESET}      - Add a new email account")
+        print(f"  {YELLOW}account remove <email>{RESET} - Remove an email account")
+        print(f"  {YELLOW}account switch <email>{RESET} - Switch current account")
 
         print(f"\n{CYAN}{'=' * 60}{RESET}")
 
@@ -255,6 +265,30 @@ class AgentService:
 
                 if prompt.lower() in ['reset-sticky', 'reset']:
                     self._reset_sticky_models()
+                    continue
+
+                if prompt.lower() == 'accounts':
+                    self._list_accounts()
+                    continue
+
+                if prompt.lower() == 'account add':
+                    self._add_account()
+                    continue
+
+                if prompt.lower().startswith('account remove '):
+                    try:
+                        email = prompt.split('account remove ', 1)[1].strip()
+                        self._remove_account(email)
+                    except IndexError:
+                        print(f"Invalid command. Use: account remove <email>")
+                    continue
+
+                if prompt.lower().startswith('account switch '):
+                    try:
+                        email = prompt.split('account switch ', 1)[1].strip()
+                        self._switch_account(email)
+                    except IndexError:
+                        print(f"Invalid command. Use: account switch <email>")
                     continue
 
                 # Submit task
@@ -542,6 +576,237 @@ class AgentService:
         except Exception as e:
             self.logger.error(f"Error resetting sticky models: {e}")
             print(f"\n\033[1;31mError:\033[0m {e}")
+
+    def _check_accounts(self) -> bool:
+        """Check if email accounts are configured, prompt to add if none exist.
+
+        Returns:
+            bool: True if accounts exist or were added, False if user refused
+        """
+        from .agent.email import get_account_manager
+
+        account_manager = get_account_manager()
+        accounts = account_manager.get_accounts()
+
+        if accounts:
+            self.logger.info(f"Found {len(accounts)} configured email account(s)")
+            return True
+
+        # No accounts configured - prompt user
+        CYAN = '\033[1;36m'
+        YELLOW = '\033[1;33m'
+        GREEN = '\033[1;32m'
+        RED = '\033[1;31m'
+        RESET = '\033[0m'
+        BOLD = '\033[1m'
+
+        print(f"\n{CYAN}{'=' * 60}{RESET}")
+        print(f"{BOLD}{YELLOW}⚠️  No Email Accounts Configured{RESET}")
+        print(f"{CYAN}{'=' * 60}{RESET}\n")
+        print(f"The agent requires at least one email account for job monitoring.")
+        print(f"Would you like to add an email account now?\n")
+
+        response = input(f"{BOLD}Add email account? (y/n):{RESET} ").strip().lower()
+
+        if response not in ['y', 'yes']:
+            print(f"\n{RED}✗ Cannot start without an email account{RESET}")
+            print(f"{CYAN}{'=' * 60}{RESET}\n")
+            return False
+
+        # User wants to add account - run interactive flow
+        print(f"\n{GREEN}✓ Starting account setup...{RESET}\n")
+
+        try:
+            import asyncio
+
+            # Create event loop for async account addition
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            account = loop.run_until_complete(
+                account_manager.add_account_interactive()
+            )
+
+            loop.close()
+
+            print(f"\n{GREEN}✓ Successfully added account: {account.email}{RESET}")
+            print(f"{CYAN}{'=' * 60}{RESET}\n")
+
+            return True
+
+        except KeyboardInterrupt:
+            print(f"\n\n{YELLOW}✗ Account setup cancelled{RESET}")
+            print(f"{CYAN}{'=' * 60}{RESET}\n")
+            return False
+
+        except Exception as e:
+            self.logger.error(f"Failed to add account: {e}")
+            print(f"\n{RED}✗ Failed to add account: {e}{RESET}")
+            print(f"{CYAN}{'=' * 60}{RESET}\n")
+            return False
+
+    def _list_accounts(self):
+        """List all configured email accounts."""
+        try:
+            from .agent.email import get_account_manager
+
+            # ANSI color codes
+            CYAN = '\033[1;36m'
+            GREEN = '\033[1;32m'
+            YELLOW = '\033[1;33m'
+            GRAY = '\033[0;37m'
+            RESET = '\033[0m'
+            BOLD = '\033[1m'
+
+            account_manager = get_account_manager()
+            accounts = account_manager.get_accounts()
+            current = account_manager.get_current_account()
+
+            print(f"\n{CYAN}{'=' * 60}{RESET}")
+            print(f"{BOLD}{CYAN}📧 Configured Email Accounts{RESET}")
+            print(f"{CYAN}{'=' * 60}{RESET}\n")
+
+            if not accounts:
+                print(f"{YELLOW}No accounts configured{RESET}")
+            else:
+                for i, account in enumerate(accounts, 1):
+                    is_current = f" {GREEN}✓ [CURRENT]{RESET}" if current and account.email == current.email else ""
+                    print(f"{YELLOW}{i}.{RESET} {BOLD}{account.email}{RESET}{is_current}")
+                    print(f"   {GRAY}Name:{RESET} {account.display_name}")
+                    print(f"   {GRAY}Added:{RESET} {account.added_date.strftime('%Y-%m-%d %H:%M')}")
+                    if account.last_sync:
+                        print(f"   {GRAY}Last Sync:{RESET} {account.last_sync.strftime('%Y-%m-%d %H:%M')}")
+                    print()
+
+            print(f"{CYAN}{'=' * 60}{RESET}")
+
+        except Exception as e:
+            self.logger.error(f"Error listing accounts: {e}")
+            print(f"\033[1;31mError:\033[0m {e}")
+
+    def _add_account(self):
+        """Add a new email account via browser OAuth."""
+        try:
+            from .agent.email import get_account_manager
+            import asyncio
+
+            # ANSI color codes
+            GREEN = '\033[1;32m'
+            YELLOW = '\033[1;33m'
+            RED = '\033[1;31m'
+            CYAN = '\033[1;36m'
+            RESET = '\033[0m'
+            BOLD = '\033[1m'
+
+            print(f"\n{CYAN}{'=' * 60}{RESET}")
+            print(f"{BOLD}{CYAN}➕ Add Email Account{RESET}")
+            print(f"{CYAN}{'=' * 60}{RESET}\n")
+
+            account_manager = get_account_manager()
+
+            print(f"{YELLOW}⏳ Opening browser for authentication...{RESET}\n")
+
+            # Create event loop for async account addition
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            account = loop.run_until_complete(
+                account_manager.add_account_interactive()
+            )
+
+            loop.close()
+
+            print(f"\n{GREEN}✓ Successfully added account: {BOLD}{account.email}{RESET}")
+            print(f"{CYAN}{'=' * 60}{RESET}\n")
+
+            self.logger.info(f"Added email account: {account.email}")
+
+        except KeyboardInterrupt:
+            print(f"\n\n{YELLOW}✗ Account setup cancelled{RESET}")
+            print(f"{CYAN}{'=' * 60}{RESET}\n")
+
+        except Exception as e:
+            self.logger.error(f"Failed to add account: {e}")
+            print(f"\n{RED}✗ Failed to add account: {e}{RESET}")
+            print(f"{CYAN}{'=' * 60}{RESET}\n")
+
+    def _remove_account(self, email: str):
+        """Remove an email account.
+
+        Args:
+            email: Email address to remove
+        """
+        try:
+            from .agent.email import get_account_manager
+
+            # ANSI color codes
+            GREEN = '\033[1;32m'
+            YELLOW = '\033[1;33m'
+            RED = '\033[1;31m'
+            CYAN = '\033[1;36m'
+            RESET = '\033[0m'
+            BOLD = '\033[1m'
+
+            account_manager = get_account_manager()
+
+            # Check if account exists
+            accounts = account_manager.get_accounts()
+            if not any(acc.email == email for acc in accounts):
+                print(f"\n{RED}✗ Account not found: {email}{RESET}\n")
+                return
+
+            # Confirm removal
+            print(f"\n{YELLOW}⚠️  Remove account: {BOLD}{email}{RESET}")
+            response = input(f"{BOLD}Are you sure? (y/n):{RESET} ").strip().lower()
+
+            if response not in ['y', 'yes']:
+                print(f"{CYAN}✗ Cancelled{RESET}\n")
+                return
+
+            # Remove account
+            if account_manager.remove_account(email):
+                print(f"\n{GREEN}✓ Successfully removed account: {BOLD}{email}{RESET}\n")
+                self.logger.info(f"Removed email account: {email}")
+            else:
+                print(f"\n{RED}✗ Failed to remove account{RESET}\n")
+
+        except Exception as e:
+            self.logger.error(f"Error removing account: {e}")
+            print(f"\n{RED}✗ Error: {e}{RESET}\n")
+
+    def _switch_account(self, email: str):
+        """Switch to a different email account.
+
+        Args:
+            email: Email address to switch to
+        """
+        try:
+            from .agent.email import get_account_manager
+
+            # ANSI color codes
+            GREEN = '\033[1;32m'
+            RED = '\033[1;31m'
+            RESET = '\033[0m'
+            BOLD = '\033[1m'
+
+            account_manager = get_account_manager()
+
+            # Check if account exists
+            accounts = account_manager.get_accounts()
+            if not any(acc.email == email for acc in accounts):
+                print(f"\n{RED}✗ Account not found: {email}{RESET}\n")
+                return
+
+            # Switch account
+            if account_manager.set_current_account(email):
+                print(f"\n{GREEN}✓ Switched to account: {BOLD}{email}{RESET}\n")
+                self.logger.info(f"Switched to email account: {email}")
+            else:
+                print(f"\n{RED}✗ Failed to switch account{RESET}\n")
+
+        except Exception as e:
+            self.logger.error(f"Error switching account: {e}")
+            print(f"\n{RED}✗ Error: {e}{RESET}\n")
 
     def shutdown(self):
         """Graceful shutdown of all components."""
