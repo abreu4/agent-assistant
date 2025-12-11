@@ -199,7 +199,7 @@ class AgentService:
 
         print(f"{GREEN}Commands:{RESET}")
         print(f"  {YELLOW}exit{RESET} or {YELLOW}quit{RESET}     - Stop the service")
-        print(f"  {YELLOW}local{RESET} or {YELLOW}remote{RESET}  - Force a specific model tier")
+        print(f"  {YELLOW}local{RESET} / {YELLOW}remote{RESET} / {YELLOW}auto{RESET} - Set model mode (persists)")
         print(f"  {YELLOW}models{RESET}           - List available remote models")
         print(f"  {YELLOW}switch <number>{RESET}  - Switch to a different remote model")
         print(f"  {YELLOW}current{RESET}          - Show current remote model")
@@ -209,10 +209,15 @@ class AgentService:
         print(f"  {YELLOW}account add{RESET}      - Add a new email account")
         print(f"  {YELLOW}account remove <email>{RESET} - Remove an email account")
         print(f"  {YELLOW}account switch <email>{RESET} - Switch current account")
+        print(f"  {YELLOW}sync{RESET}             - Sync emails and detect job postings")
+        print(f"  {YELLOW}jobs{RESET}             - List tracked job postings")
+        print(f"  {YELLOW}job <id>{RESET}         - Show details for a specific job")
+        print(f"  {YELLOW}documents{RESET}        - List indexed documents")
 
         print(f"\n{CYAN}{'=' * 60}{RESET}")
 
-        force_model = None
+        # Load persisted user preference (default to "local")
+        force_model = config.get_user_force_model() or "local"
 
         while not self.stop_event.is_set():
             try:
@@ -229,17 +234,20 @@ class AgentService:
 
                 if prompt.lower() == 'local':
                     force_model = 'local'
-                    print("\033[1;33m🔧 Forcing local model for next prompt\033[0m")
+                    config.set_user_force_model('local')
+                    print("\033[1;32m✓ Mode: Local models only (persisted)\033[0m")
                     continue
 
                 if prompt.lower() == 'remote':
                     force_model = 'remote'
-                    print("\033[1;33m🔧 Forcing remote model for next prompt\033[0m")
+                    config.set_user_force_model('remote')
+                    print("\033[1;32m✓ Mode: Remote models only (persisted)\033[0m")
                     continue
 
                 if prompt.lower() == 'auto':
                     force_model = None
-                    print("\033[1;32m✓ Automatic model selection enabled\033[0m")
+                    config.set_user_force_model(None)
+                    print("\033[1;32m✓ Mode: Auto routing (persisted)\033[0m")
                     continue
 
                 if prompt.lower() in ['models', 'list-models', 'list']:
@@ -291,6 +299,27 @@ class AgentService:
                         print(f"Invalid command. Use: account switch <email>")
                     continue
 
+                if prompt.lower() in ['check-emails', 'sync-emails', 'sync']:
+                    import asyncio
+                    asyncio.run(self._sync_emails())
+                    continue
+
+                if prompt.lower() == 'jobs':
+                    self._list_jobs()
+                    continue
+
+                if prompt.lower() == 'documents':
+                    self._list_documents()
+                    continue
+
+                if prompt.lower().startswith('job '):
+                    try:
+                        job_id = int(prompt.split()[1])
+                        self._show_job_details(job_id)
+                    except (ValueError, IndexError):
+                        print(f"Invalid command. Use: job <id>")
+                    continue
+
                 # Submit task
                 task = {
                     'type': 'prompt',
@@ -309,10 +338,6 @@ class AgentService:
 
                 # Stop spinner
                 spinner.stop()
-
-                # Reset force_model after use
-                if force_model:
-                    force_model = None
 
             except KeyboardInterrupt:
                 print("\n\nInterrupted. Type 'exit' to quit.")
@@ -438,15 +463,25 @@ class AgentService:
 
             print(f"\n{CYAN}{'=' * 60}{RESET}")
             if current_model:
-                print(f"{BOLD}{GREEN}🎯 Current Remote Model{RESET}")
+                print(f"{BOLD}{GREEN}🎯 Current Configuration{RESET}")
                 print(f"{CYAN}{'=' * 60}{RESET}\n")
-                print(f"{BOLD}{current_model['name']}{RESET}")
-                print(f"{GRAY}ID:{RESET} {current_model['id']}")
-                print(f"{GRAY}{current_model['description']}{RESET}")
+                print(f"{BOLD}Remote Model:{RESET}")
+                print(f"  {current_model['name']}")
+                print(f"  {GRAY}ID:{RESET} {current_model['id']}")
+                print(f"  {GRAY}{current_model['description']}{RESET}")
             else:
-                print(f"{BOLD}{GREEN}🎯 Current Remote Model{RESET}")
+                print(f"{BOLD}{GREEN}🎯 Current Configuration{RESET}")
                 print(f"{CYAN}{'=' * 60}{RESET}\n")
-                print(f"{current_id}")
+                print(f"{BOLD}Remote Model:{RESET} {current_id}")
+
+            # Show current force_model mode
+            force_mode = config.get_user_force_model() or "auto"
+            mode_display = {
+                "local": f"{GREEN}local{RESET} (all queries use local models)",
+                "remote": f"{GREEN}remote{RESET} (all queries use remote models)",
+                "auto": f"{GREEN}auto{RESET} (intelligent routing)"
+            }.get(force_mode, force_mode)
+            print(f"\n{BOLD}Mode:{RESET} {mode_display}")
             print(f"\n{CYAN}{'=' * 60}{RESET}")
         except Exception as e:
             self.logger.error(f"Error showing current model: {e}")
@@ -806,6 +841,176 @@ class AgentService:
 
         except Exception as e:
             self.logger.error(f"Error switching account: {e}")
+            print(f"\n{RED}✗ Error: {e}{RESET}\n")
+
+    async def _sync_emails(self):
+        """Sync emails and detect job postings."""
+        try:
+            from .agent.tracking.manager import get_job_manager
+
+            # ANSI color codes
+            GREEN = '\033[1;32m'
+            YELLOW = '\033[1;33m'
+            RED = '\033[1;31m'
+            CYAN = '\033[1;36m'
+            RESET = '\033[0m'
+            BOLD = '\033[1m'
+
+            print(f"\n{CYAN}{'=' * 60}{RESET}")
+            print(f"{BOLD}{CYAN}📧 Syncing Emails{RESET}")
+            print(f"{CYAN}{'=' * 60}{RESET}\n")
+
+            print(f"{YELLOW}⏳ Fetching emails and detecting job postings...{RESET}\n")
+
+            manager = get_job_manager()
+
+            # Run sync in executor to not block
+            import asyncio
+            loop = asyncio.get_event_loop()
+            stats = await loop.run_in_executor(None, manager.sync_emails)
+
+            if stats:
+                emails_processed = stats.get('emails_processed', 0)
+                jobs_found = stats.get('jobs_found', 0)
+
+                print(f"{GREEN}✓ Email sync complete{RESET}")
+                print(f"  Emails processed: {BOLD}{emails_processed}{RESET}")
+                print(f"  Jobs found: {BOLD}{jobs_found}{RESET}\n")
+
+                self.logger.info(f"Email sync: {emails_processed} emails, {jobs_found} jobs")
+            else:
+                print(f"{GREEN}✓ Email sync complete (no new jobs){RESET}\n")
+
+            print(f"{CYAN}{'=' * 60}{RESET}\n")
+
+        except Exception as e:
+            self.logger.error(f"Email sync failed: {e}")
+            print(f"\n{RED}✗ Email sync failed: {e}{RESET}")
+            print(f"{CYAN}{'=' * 60}{RESET}\n")
+
+    def _list_jobs(self, status: str = "new", limit: int = 20):
+        """List tracked job postings.
+
+        Args:
+            status: Filter by status (default: new)
+            limit: Maximum number of jobs (default: 20)
+        """
+        try:
+            from .agent.tracking import get_job_database
+
+            # ANSI color codes
+            GREEN = '\033[1;32m'
+            YELLOW = '\033[1;33m'
+            RED = '\033[1;31m'
+            CYAN = '\033[1;36m'
+            GRAY = '\033[90m'
+            RESET = '\033[0m'
+            BOLD = '\033[1m'
+
+            db = get_job_database()
+            jobs = db.get_jobs(status=status, limit=limit)
+
+            print(f"\n{CYAN}{'=' * 60}{RESET}")
+            print(f"{BOLD}{CYAN}💼 Job Postings ({status.upper()}){RESET}")
+            print(f"{CYAN}{'=' * 60}{RESET}\n")
+
+            if not jobs:
+                print(f"{YELLOW}No jobs found with status: {status}{RESET}\n")
+            else:
+                for job in jobs:
+                    print(f"{YELLOW}[ID: {job['id']}]{RESET} {BOLD}{job['position']}{RESET}")
+                    print(f"  {GRAY}Company:{RESET} {job['company'] or 'N/A'}")
+                    print(f"  {GRAY}Location:{RESET} {job['location'] or 'N/A'}")
+                    print(f"  {GRAY}Status:{RESET} {job['status']}")
+                    print(f"  {GRAY}Found:{RESET} {job['found_date']}")
+                    if job['application_link']:
+                        print(f"  {GRAY}Link:{RESET} {job['application_link']}")
+                    print()
+
+            print(f"{CYAN}{'=' * 60}{RESET}\n")
+
+        except Exception as e:
+            self.logger.error(f"Error listing jobs: {e}")
+            print(f"\n{RED}✗ Error: {e}{RESET}\n")
+
+    def _list_documents(self):
+        """List indexed job application documents."""
+        try:
+            from .agent.document_rag import get_document_rag
+
+            # ANSI color codes
+            GREEN = '\033[1;32m'
+            YELLOW = '\033[1;33m'
+            CYAN = '\033[1;36m'
+            GRAY = '\033[90m'
+            RESET = '\033[0m'
+            BOLD = '\033[1m'
+
+            rag = get_document_rag()
+            summary = rag.get_document_summary()
+
+            print(f"\n{CYAN}{'=' * 60}{RESET}")
+            print(f"{BOLD}{CYAN}📄 Indexed Documents{RESET}")
+            print(f"{CYAN}{'=' * 60}{RESET}\n")
+
+            print(summary)
+
+            print(f"\n{CYAN}{'=' * 60}{RESET}\n")
+
+        except Exception as e:
+            self.logger.error(f"Error listing documents: {e}")
+            print(f"\n{RED}✗ Error: {e}{RESET}\n")
+
+    def _show_job_details(self, job_id: int):
+        """Show detailed information for a specific job.
+
+        Args:
+            job_id: Job ID from database
+        """
+        try:
+            from .agent.tracking import get_job_database
+
+            # ANSI color codes
+            GREEN = '\033[1;32m'
+            YELLOW = '\033[1;33m'
+            RED = '\033[1;31m'
+            CYAN = '\033[1;36m'
+            GRAY = '\033[90m'
+            RESET = '\033[0m'
+            BOLD = '\033[1m'
+
+            db = get_job_database()
+            job = db.get_job_by_id(job_id)
+
+            print(f"\n{CYAN}{'=' * 60}{RESET}")
+            print(f"{BOLD}{CYAN}💼 Job Details (ID: {job_id}){RESET}")
+            print(f"{CYAN}{'=' * 60}{RESET}\n")
+
+            if not job:
+                print(f"{RED}✗ Job not found with ID: {job_id}{RESET}\n")
+            else:
+                print(f"{BOLD}Position:{RESET} {job['position']}")
+                print(f"{BOLD}Company:{RESET} {job['company'] or 'N/A'}")
+                print(f"{BOLD}Location:{RESET} {job['location'] or 'N/A'}")
+                print(f"{BOLD}Job Type:{RESET} {job['job_type'] or 'N/A'}")
+                print(f"{BOLD}Salary:{RESET} {job['salary'] or 'N/A'}")
+                print(f"{BOLD}Status:{RESET} {job['status']}")
+                print(f"{BOLD}Found Date:{RESET} {job['found_date']}")
+                print(f"{BOLD}Email Date:{RESET} {job['email_date']}")
+                print(f"{BOLD}Account:{RESET} {job['account_email']}")
+
+                if job['application_link']:
+                    print(f"\n{BOLD}Application Link:{RESET}")
+                    print(f"{CYAN}{job['application_link']}{RESET}")
+
+                if job['notes']:
+                    print(f"\n{BOLD}Notes:{RESET}")
+                    print(f"{job['notes']}")
+
+            print(f"\n{CYAN}{'=' * 60}{RESET}\n")
+
+        except Exception as e:
+            self.logger.error(f"Error showing job details: {e}")
             print(f"\n{RED}✗ Error: {e}{RESET}\n")
 
     def shutdown(self):

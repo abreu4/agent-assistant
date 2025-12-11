@@ -1,6 +1,7 @@
 implementation:
-phase 2 - Remove the credential based setup altogether, just keep the browser based
-continue with transf plan
+-make force local/remote persist, default to local on startup
+-workspace_rag was queried when I asked for emails, should be email rag, figure out why
+-continue with transf plan
 
 cleanup:
 remove deprecated docs in docs/

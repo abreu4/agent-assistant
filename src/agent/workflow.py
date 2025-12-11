@@ -51,25 +51,48 @@ class HybridAgent:
         await self.llm_system.warmup()
         self.graph = self._build_graph()
 
-        # Index workspace if enabled
-        if config.get('tools.workspace_rag.enabled', True):
-            if config.get('tools.workspace_rag.auto_index_on_startup', True):
+        # Index documents (CV, cover letters) if enabled
+        if config.get('tools.document_rag.enabled', True):
+            if config.get('tools.document_rag.auto_index_on_startup', True):
                 try:
-                    logger.info("Indexing workspace files...")
-                    from .workspace_rag import get_workspace_rag
-                    rag = get_workspace_rag()
-                    await self._index_workspace_async(rag)
-                    logger.info("✓ Workspace indexed")
+                    logger.info("Indexing job application documents...")
+                    from .document_rag import get_document_rag
+                    rag = get_document_rag()
+                    await self._index_documents_async(rag)
+                    logger.info("✓ Documents indexed")
                 except Exception as e:
-                    logger.warning(f"Workspace indexing failed: {e}")
+                    logger.warning(f"Document indexing failed: {e}")
+
+        # Sync emails on startup if enabled
+        if config.get('job_agent.email.index_on_startup', False):
+            try:
+                logger.info("Syncing emails and detecting job postings...")
+                from .tracking.manager import get_job_manager
+                manager = get_job_manager()
+                stats = await self._sync_emails_async(manager)
+
+                if stats:
+                    jobs_found = stats.get('jobs_found', 0)
+                    emails_processed = stats.get('emails_processed', 0)
+                    logger.info(f"✓ Email sync complete: {emails_processed} emails, {jobs_found} jobs found")
+                else:
+                    logger.info("✓ Email sync complete")
+            except Exception as e:
+                logger.warning(f"Email sync failed: {e}")
 
         logger.debug("Agent ready")
 
-    async def _index_workspace_async(self, rag):
-        """Index workspace in background."""
+    async def _index_documents_async(self, rag):
+        """Index documents in background."""
         import asyncio
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, rag.index_workspace)
+        await loop.run_in_executor(None, rag.index_documents)
+
+    async def _sync_emails_async(self, manager):
+        """Sync emails in background."""
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, manager.sync_emails)
 
     def _build_graph(self) -> StateGraph:
         """Build the LangGraph workflow."""

@@ -221,34 +221,27 @@ class Config:
         """
         return bool(self.get('llm.routing.sticky_model', True))
 
-    def get_last_successful_model(self, mode_key: str) -> Optional[str]:
+    def get_last_successful_model(self, tier: str) -> Optional[str]:
         """
-        Get the last successful model for a mode.
+        Get the last successful model for a tier.
 
         Args:
-            mode_key: Mode key like 'local_default', 'local_code', 'remote_default', 'remote_code'
-                      OR legacy tier like 'local' or 'remote' (for backwards compatibility)
+            tier: 'local' or 'remote'
 
         Returns:
             Model ID or None
         """
-        # Backwards compatibility: if mode_key doesn't contain underscore, treat as legacy tier
-        if '_' not in mode_key:
-            return self.get(f'llm.routing.last_successful_{mode_key}_model')
+        return self.get(f'llm.routing.last_successful_{tier}_model')
 
-        return self.get(f'llm.routing.last_successful_{mode_key}_model')
-
-    def set_last_successful_model(self, mode_key: str, model_id: str):
+    def set_last_successful_model(self, tier: str, model_id: str):
         """
-        Set the last successful model for a mode.
+        Set the last successful model for a tier.
 
         Args:
-            mode_key: Mode key like 'local_default', 'local_code', 'remote_default', 'remote_code'
-                      OR legacy tier like 'local' or 'remote' (for backwards compatibility)
+            tier: 'local' or 'remote'
             model_id: Model ID that succeeded
         """
-        # Backwards compatibility: if mode_key doesn't contain underscore, treat as legacy tier
-        config_key = f'last_successful_{mode_key}_model'
+        config_key = f'last_successful_{tier}_model'
 
         # Ensure routing section exists
         if 'routing' not in self.config['llm']:
@@ -256,6 +249,42 @@ class Config:
 
         # Update in-memory config
         self.config['llm']['routing'][config_key] = model_id
+
+        # Persist to file
+        config_path = Path(__file__).parent.parent.parent / "config" / "config.yaml"
+        with open(config_path, 'w') as f:
+            yaml.dump(self.config, f, default_flow_style=False, sort_keys=False)
+
+    def get_user_force_model(self) -> Optional[str]:
+        """
+        Get persisted user force_model preference.
+
+        Returns:
+            "local", "remote", or None (auto)
+        """
+        return self.config.get("llm", {}).get("routing", {}).get("user_force_model")
+
+    def set_user_force_model(self, mode: Optional[str]) -> None:
+        """
+        Save user's force_model preference to config file.
+
+        Args:
+            mode: "local", "remote", or None (auto)
+
+        Raises:
+            ValueError: If mode is invalid
+        """
+        if mode not in [None, "local", "remote"]:
+            raise ValueError(f"Invalid force_model mode: {mode}")
+
+        # Ensure routing section exists
+        if 'llm' not in self.config:
+            self.config['llm'] = {}
+        if 'routing' not in self.config['llm']:
+            self.config['llm']['routing'] = {}
+
+        # Update in-memory config
+        self.config['llm']['routing']['user_force_model'] = mode
 
         # Persist to file
         config_path = Path(__file__).parent.parent.parent / "config" / "config.yaml"

@@ -1,4 +1,4 @@
-"""RAG system for workspace file awareness and semantic search."""
+"""RAG system for CV, cover letters, and job application documents."""
 import os
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
@@ -13,48 +13,48 @@ from ..utils.config import config
 from ..utils.logging import get_logger
 from .custom_embeddings import DirectOllamaEmbeddings
 
-logger = get_logger("workspace_rag")
+logger = get_logger("document_rag")
 
 
-class WorkspaceRAG:
+class DocumentRAG:
     """
-    RAG system for workspace file indexing and semantic search.
+    RAG system for job application documents (CV, cover letters, etc.).
 
-    Indexes code and text files in the workspace directory,
+    Indexes PDF, DOCX, TXT, and MD files in the documents directory,
     providing semantic search capabilities for the agent.
     """
 
-    def __init__(self, workspace_dir: Optional[str] = None):
+    def __init__(self, documents_dir: Optional[str] = None):
         """
-        Initialize workspace RAG system.
+        Initialize document RAG system.
 
         Args:
-            workspace_dir: Workspace directory to index (default: from config)
+            documents_dir: Documents directory to index (default: from config job_agent.documents_path)
         """
-        self.workspace_dir = Path(workspace_dir or config.get_workspace_dir())
+        if documents_dir is None:
+            documents_dir = config.get('job_agent.documents_path', '~/job_applications/documents')
+
+        self.documents_dir = Path(documents_dir).expanduser()
         self.vectorstore: Optional[Chroma] = None
         self.embeddings = None
         self.indexed_files: Dict[str, str] = {}  # filepath -> hash
-        self.index_dir = self.workspace_dir / ".agent_index"
+        self.index_dir = Path.home() / ".job_agent" / "document_index"
 
-        # File patterns to include/exclude
-        self.include_extensions = config.get('tools.file_operations.allowed_extensions', [
-            '.py', '.md', '.txt', '.json', '.yaml', '.yml', '.toml',
-            '.js', '.ts', '.jsx', '.tsx', '.html', '.css', '.sh'
-        ])
+        # File patterns for job documents (PDF and TXT only)
+        self.include_extensions = ['.pdf', '.txt', '.md']
+
+        # Patterns to exclude
         self.exclude_patterns = [
-            '__pycache__', '.git', '.venv', 'venv', 'env', 'node_modules',
-            '.pytest_cache', '.mypy_cache', 'dist', 'build', '.egg-info',
-            '.agent_index', '.tox', '.eggs', '*.egg-info', '.coverage',
-            'htmlcov', '.hypothesis', '.cache', 'site-packages'
+            '__pycache__', '.git', '.DS_Store', 'thumbs.db',
+            '.tmp', '.temp', '~$'  # Office temp files
         ]
 
-        logger.debug(f"Workspace RAG initialized for repository: {self.workspace_dir}")
+        logger.debug(f"Document RAG initialized for: {self.documents_dir}")
 
     def _get_embeddings(self):
         """Get or create embeddings model."""
         if self.embeddings is None:
-            # Use local Ollama embeddings for privacy and speed
+            # Use local Ollama embeddings for privacy
             try:
                 self.embeddings = DirectOllamaEmbeddings(
                     model="nomic-embed-text",  # Fast, good quality embedding model
@@ -66,7 +66,7 @@ class WorkspaceRAG:
                 # Fallback to basic embeddings
                 try:
                     self.embeddings = DirectOllamaEmbeddings(
-                        model="llama3.2:3b",  # Use smallest available model
+                        model="llama3.2:3b",
                         base_url=config.get('llm.local.base_url', 'http://localhost:11434')
                     )
                     logger.debug("Fallback to llama3.2:3b for embeddings")
@@ -92,11 +92,11 @@ class WorkspaceRAG:
                 return False
 
         # Check file extension
-        if filepath.suffix not in self.include_extensions:
+        if filepath.suffix.lower() not in self.include_extensions:
             return False
 
-        # Check file size (skip very large files)
-        max_size = config.get('tools.file_operations.max_file_size_mb', 10) * 1024 * 1024
+        # Check file size (skip very large files > 50MB)
+        max_size = 50 * 1024 * 1024  # 50MB for documents
         try:
             if filepath.stat().st_size > max_size:
                 logger.debug(f"Skipping large file: {filepath}")
@@ -123,9 +123,81 @@ class WorkspaceRAG:
             logger.warning(f"Failed to hash {filepath}: {e}")
             return ""
 
+    def _load_pdf(self, filepath: Path) -> List[Document]:
+        """
+        Load PDF file.
+
+        Args:
+            filepath: Path to PDF file
+
+        Returns:
+            List of document chunks
+        """
+        try:
+            from pypdf import PdfReader
+
+            reader = PdfReader(str(filepath))
+            text = ""
+
+            # Extract text from all pages
+            for page in reader.pages:
+                text += page.extract_text() + "\n\n"
+
+            if not text.strip():
+                logger.warning(f"No text extracted from PDF: {filepath}")
+                return []
+
+            # Create document with metadata
+            doc = Document(
+                page_content=text,
+                metadata={
+                    'file_path': str(filepath),
+                    'file_name': filepath.name,
+                    'file_type': filepath.suffix,
+                    'num_pages': len(reader.pages)
+                }
+            )
+
+            return [doc]
+
+        except ImportError:
+            logger.error("pypdf not installed. Install with: pip install pypdf")
+            return []
+        except Exception as e:
+            logger.warning(f"Failed to load PDF {filepath}: {e}")
+            return []
+
+    def _load_text(self, filepath: Path) -> List[Document]:
+        """
+        Load text file (TXT, MD).
+
+        Args:
+            filepath: Path to text file
+
+        Returns:
+            List of document chunks
+        """
+        try:
+            loader = TextLoader(str(filepath), encoding='utf-8')
+            documents = loader.load()
+
+            # Add metadata
+            for doc in documents:
+                doc.metadata.update({
+                    'file_path': str(filepath),
+                    'file_name': filepath.name,
+                    'file_type': filepath.suffix
+                })
+
+            return documents
+
+        except Exception as e:
+            logger.warning(f"Failed to load text file {filepath}: {e}")
+            return []
+
     def _load_file(self, filepath: Path) -> List[Document]:
         """
-        Load and split a single file.
+        Load a single document file.
 
         Args:
             filepath: Path to file
@@ -133,41 +205,36 @@ class WorkspaceRAG:
         Returns:
             List of document chunks
         """
-        try:
-            # Try to load as text
-            loader = TextLoader(str(filepath), encoding='utf-8')
-            documents = loader.load()
+        ext = filepath.suffix.lower()
 
-            # Add metadata
-            relative_path = str(filepath.relative_to(self.workspace_dir))
-            for doc in documents:
-                doc.metadata.update({
-                    'file_path': relative_path,
-                    'file_name': filepath.name,
-                    'file_type': filepath.suffix,
-                    'full_path': str(filepath)
-                })
-
-            # Split into chunks
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000,
-                chunk_overlap=200,
-                length_function=len,
-                separators=["\n\n", "\n", " ", ""]
-            )
-
-            chunks = text_splitter.split_documents(documents)
-            logger.debug(f"Loaded {filepath.name}: {len(chunks)} chunks")
-
-            return chunks
-
-        except Exception as e:
-            logger.warning(f"Failed to load {filepath}: {e}")
+        # Route to appropriate loader
+        if ext == '.pdf':
+            documents = self._load_pdf(filepath)
+        elif ext in ['.txt', '.md']:
+            documents = self._load_text(filepath)
+        else:
+            logger.warning(f"Unsupported file type: {ext}")
             return []
 
-    def index_workspace(self, force_reindex: bool = False) -> int:
+        if not documents:
+            return []
+
+        # Split into chunks
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200,
+            length_function=len,
+            separators=["\n\n", "\n", ". ", " ", ""]
+        )
+
+        chunks = text_splitter.split_documents(documents)
+        logger.debug(f"Loaded {filepath.name}: {len(chunks)} chunks")
+
+        return chunks
+
+    def index_documents(self, force_reindex: bool = False) -> int:
         """
-        Index all files in workspace.
+        Index all documents in documents directory.
 
         Args:
             force_reindex: Force re-indexing even if files haven't changed
@@ -175,18 +242,25 @@ class WorkspaceRAG:
         Returns:
             Number of files indexed
         """
-        logger.info(f"🔍 Indexing workspace: {self.workspace_dir}")
+        logger.info(f"🔍 Indexing documents: {self.documents_dir}")
 
-        # Ensure nomic-embed-text is downloaded
+        # Create documents directory if it doesn't exist
+        self.documents_dir.mkdir(parents=True, exist_ok=True)
+
+        # Ensure embedding model is available
         self._ensure_embedding_model()
 
         # Find all indexable files
         all_files = []
-        for filepath in self.workspace_dir.rglob('*'):
+        for filepath in self.documents_dir.rglob('*'):
             if filepath.is_file() and self._should_index_file(filepath):
                 all_files.append(filepath)
 
-        logger.info(f"Found {len(all_files)} indexable files")
+        logger.info(f"Found {len(all_files)} indexable documents")
+
+        if not all_files:
+            logger.info("No documents found to index")
+            return 0
 
         # Check which files need indexing
         documents = []
@@ -194,18 +268,18 @@ class WorkspaceRAG:
 
         for filepath in all_files:
             file_hash = self._get_file_hash(filepath)
-            relative_path = str(filepath.relative_to(self.workspace_dir))
+            file_key = str(filepath)
 
             # Skip if already indexed and unchanged
-            if not force_reindex and relative_path in self.indexed_files:
-                if self.indexed_files[relative_path] == file_hash:
+            if not force_reindex and file_key in self.indexed_files:
+                if self.indexed_files[file_key] == file_hash:
                     continue
 
             # Load and chunk file
             chunks = self._load_file(filepath)
             if chunks:
                 documents.extend(chunks)
-                self.indexed_files[relative_path] = file_hash
+                self.indexed_files[file_key] = file_hash
                 indexed_count += 1
 
         if documents:
@@ -216,18 +290,18 @@ class WorkspaceRAG:
 
             if self.vectorstore is None:
                 # Create new vectorstore
-                self.index_dir.mkdir(exist_ok=True)
+                self.index_dir.mkdir(parents=True, exist_ok=True)
                 self.vectorstore = Chroma.from_documents(
                     documents=documents,
                     embedding=embeddings,
                     persist_directory=str(self.index_dir),
-                    collection_name="workspace"
+                    collection_name="documents"
                 )
             else:
                 # Add to existing vectorstore
                 self.vectorstore.add_documents(documents)
 
-            logger.info(f"✓ Indexed {indexed_count} files")
+            logger.info(f"✓ Indexed {indexed_count} documents")
         else:
             # Load existing index if available
             if self.vectorstore is None and self.index_dir.exists():
@@ -236,9 +310,9 @@ class WorkspaceRAG:
                 self.vectorstore = Chroma(
                     persist_directory=str(self.index_dir),
                     embedding_function=embeddings,
-                    collection_name="workspace"
+                    collection_name="documents"
                 )
-            logger.info("No new files to index")
+            logger.info("No new documents to index")
 
         return indexed_count
 
@@ -270,19 +344,19 @@ class WorkspaceRAG:
         filter_by_type: Optional[str] = None
     ) -> List[Tuple[Document, float]]:
         """
-        Semantic search in workspace files.
+        Semantic search in documents.
 
         Args:
             query: Search query
             k: Number of results to return
-            filter_by_type: Optional file extension filter (e.g., '.py')
+            filter_by_type: Optional file extension filter (e.g., '.pdf')
 
         Returns:
             List of (document, score) tuples
         """
         if self.vectorstore is None:
             logger.warning("Vectorstore not initialized, indexing now...")
-            self.index_workspace()
+            self.index_documents()
 
             if self.vectorstore is None:
                 logger.error("Failed to initialize vectorstore")
@@ -308,79 +382,36 @@ class WorkspaceRAG:
             logger.error(f"Search failed: {e}")
             return []
 
-    def get_file_summary(self) -> str:
+    def get_document_summary(self) -> str:
         """
-        Get summary of indexed workspace files.
+        Get summary of indexed documents.
 
         Returns:
             Summary string
         """
         if not self.indexed_files:
-            return "Workspace not yet indexed."
+            return "No documents indexed yet."
 
         # Count by file type
         type_counts = {}
         for filepath in self.indexed_files.keys():
-            ext = Path(filepath).suffix or '.txt'
+            ext = Path(filepath).suffix.lower() or '.txt'
             type_counts[ext] = type_counts.get(ext, 0) + 1
 
-        summary = f"Indexed {len(self.indexed_files)} files:\n"
+        summary = f"Indexed {len(self.indexed_files)} documents:\n"
         for ext, count in sorted(type_counts.items(), key=lambda x: -x[1]):
             summary += f"  {ext}: {count}\n"
 
         return summary.strip()
 
-    def get_file_tree(self, max_depth: int = 3) -> str:
-        """
-        Get file tree of workspace.
-
-        Args:
-            max_depth: Maximum directory depth
-
-        Returns:
-            Tree structure as string
-        """
-        def build_tree(path: Path, prefix: str = "", depth: int = 0) -> str:
-            if depth > max_depth:
-                return ""
-
-            items = []
-            try:
-                entries = sorted(path.iterdir(), key=lambda x: (not x.is_dir(), x.name))
-
-                for i, entry in enumerate(entries):
-                    # Skip excluded patterns
-                    if any(pattern in str(entry) for pattern in self.exclude_patterns):
-                        continue
-
-                    is_last = i == len(entries) - 1
-                    connector = "└── " if is_last else "├── "
-
-                    if entry.is_dir():
-                        items.append(f"{prefix}{connector}{entry.name}/")
-                        if depth < max_depth:
-                            extension = "    " if is_last else "│   "
-                            items.append(build_tree(entry, prefix + extension, depth + 1))
-                    elif self._should_index_file(entry):
-                        items.append(f"{prefix}{connector}{entry.name}")
-
-            except PermissionError:
-                pass
-
-            return "\n".join(filter(None, items))
-
-        tree = f"{self.workspace_dir.name}/\n"
-        tree += build_tree(self.workspace_dir)
-        return tree
-
 
 # Global instance
-_workspace_rag: Optional[WorkspaceRAG] = None
+_document_rag: Optional[DocumentRAG] = None
 
 
-def get_workspace_rag() -> WorkspaceRAG:
-    """Get or create global workspace RAG instance."""
-    global _workspace_rag
-    if _workspace_rag is None:
-        _workspace_rag = WorkspaceRAG()
-    return _workspace_rag
+def get_document_rag() -> DocumentRAG:
+    """Get or create global document RAG instance."""
+    global _document_rag
+    if _document_rag is None:
+        _document_rag = DocumentRAG()
+    return _document_rag

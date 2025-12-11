@@ -45,7 +45,7 @@ llm:
     random_selection: true
   remote:
     provider: openrouter
-    model: nousresearch/deephermes-3-llama-3-8b-preview:free
+    model: mistralai/mistral-small-3.1-24b-instruct:free
     temperature: 0.6
     max_tokens: 4096
     openai_base: https://api.openai.com/v1
@@ -171,6 +171,7 @@ llm:
     cost_limit_monthly: 50
     complexity_threshold: medium
     force_model: local
+    user_force_model: local
     sticky_model: true
     last_successful_local_model: llama3.1:8b
     last_successful_remote_model: mistralai/mistral-small-3.1-24b-instruct:free
@@ -200,11 +201,10 @@ job_agent:
     database_path: ~/.job_agent/jobs.db
     auto_extract_metadata: true
 tools:
-  workspace_rag:
+  document_rag:
     enabled: true
     auto_index_on_startup: true
-    index_on_query: false
-    comment: Works on current working directory (repo root)
+    comment: Indexes CV and cover letters from documents_path
   web_search:
     enabled: true
     provider: duckduckgo
