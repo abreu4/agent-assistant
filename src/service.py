@@ -209,7 +209,9 @@ class AgentService:
         print(f"  {YELLOW}account add{RESET}      - Add a new email account")
         print(f"  {YELLOW}account remove <email>{RESET} - Remove an email account")
         print(f"  {YELLOW}account switch <email>{RESET} - Switch current account")
-        print(f"  {YELLOW}sync{RESET}             - Sync emails and detect job postings")
+        print(f"  {YELLOW}account disable <email>{RESET} - Disable account from syncing")
+        print(f"  {YELLOW}account enable <email>{RESET}  - Re-enable account for syncing")
+        print(f"  {YELLOW}sync{RESET}             - Sync emails from all enabled accounts")
         print(f"  {YELLOW}jobs{RESET}             - List tracked job postings")
         print(f"  {YELLOW}job <id>{RESET}         - Show details for a specific job")
         print(f"  {YELLOW}documents{RESET}        - List indexed documents")
@@ -297,6 +299,22 @@ class AgentService:
                         self._switch_account(email)
                     except IndexError:
                         print(f"Invalid command. Use: account switch <email>")
+                    continue
+
+                if prompt.lower().startswith('account disable '):
+                    try:
+                        email = prompt.split('account disable ', 1)[1].strip()
+                        self._disable_account(email)
+                    except IndexError:
+                        print(f"Invalid command. Use: account disable <email>")
+                    continue
+
+                if prompt.lower().startswith('account enable '):
+                    try:
+                        email = prompt.split('account enable ', 1)[1].strip()
+                        self._enable_account(email)
+                    except IndexError:
+                        print(f"Invalid command. Use: account enable <email>")
                     continue
 
                 if prompt.lower() in ['check-emails', 'sync-emails', 'sync']:
@@ -706,7 +724,9 @@ class AgentService:
             else:
                 for i, account in enumerate(accounts, 1):
                     is_current = f" {GREEN}✓ [CURRENT]{RESET}" if current and account.email == current.email else ""
-                    print(f"{YELLOW}{i}.{RESET} {BOLD}{account.email}{RESET}{is_current}")
+                    status = f" {GREEN}✓ [ENABLED]{RESET}" if account.enabled else f" {GRAY}[DISABLED]{RESET}"
+                    print(f"{YELLOW}{i}.{RESET} {BOLD}{account.email}{RESET}{is_current}{status}")
+                    print(f"   {GRAY}Provider:{RESET} {account.provider_type.upper()}")
                     print(f"   {GRAY}Name:{RESET} {account.display_name}")
                     print(f"   {GRAY}Added:{RESET} {account.added_date.strftime('%Y-%m-%d %H:%M')}")
                     if account.last_sync:
@@ -843,6 +863,62 @@ class AgentService:
             self.logger.error(f"Error switching account: {e}")
             print(f"\n{RED}✗ Error: {e}{RESET}\n")
 
+    def _disable_account(self, email: str):
+        """Disable account from syncing without removing it.
+
+        Args:
+            email: Email address to disable
+        """
+        try:
+            from .agent.email import get_account_manager
+
+            # ANSI color codes
+            GREEN = '\033[1;32m'
+            RED = '\033[1;31m'
+            GRAY = '\033[90m'
+            RESET = '\033[0m'
+            BOLD = '\033[1m'
+
+            account_manager = get_account_manager()
+
+            if account_manager.disable_account(email):
+                print(f"\n{GREEN}✓ Disabled account: {BOLD}{email}{RESET}")
+                print(f"{GRAY}This account will be skipped during sync{RESET}\n")
+                self.logger.info(f"Disabled account: {email}")
+            else:
+                print(f"\n{RED}✗ Failed to disable account{RESET}\n")
+
+        except Exception as e:
+            self.logger.error(f"Error disabling account: {e}")
+            print(f"\n{RED}✗ Error: {e}{RESET}\n")
+
+    def _enable_account(self, email: str):
+        """Re-enable account for syncing.
+
+        Args:
+            email: Email address to enable
+        """
+        try:
+            from .agent.email import get_account_manager
+
+            # ANSI color codes
+            GREEN = '\033[1;32m'
+            RED = '\033[1;31m'
+            RESET = '\033[0m'
+            BOLD = '\033[1m'
+
+            account_manager = get_account_manager()
+
+            if account_manager.enable_account(email):
+                print(f"\n{GREEN}✓ Enabled account: {BOLD}{email}{RESET}\n")
+                self.logger.info(f"Enabled account: {email}")
+            else:
+                print(f"\n{RED}✗ Failed to enable account{RESET}\n")
+
+        except Exception as e:
+            self.logger.error(f"Error enabling account: {e}")
+            print(f"\n{RED}✗ Error: {e}{RESET}\n")
+
     async def _sync_emails(self):
         """Sync emails and detect job postings."""
         try:
@@ -869,15 +945,31 @@ class AgentService:
             loop = asyncio.get_event_loop()
             stats = await loop.run_in_executor(None, manager.sync_emails)
 
-            if stats:
-                emails_processed = stats.get('emails_processed', 0)
-                jobs_found = stats.get('jobs_found', 0)
+            if stats and 'error' not in stats:
+                accounts_synced = stats.get('accounts_synced', 0)
+                total_emails = stats.get('total_emails_processed', 0)
+                total_jobs = stats.get('total_jobs_found', 0)
 
                 print(f"{GREEN}✓ Email sync complete{RESET}")
-                print(f"  Emails processed: {BOLD}{emails_processed}{RESET}")
-                print(f"  Jobs found: {BOLD}{jobs_found}{RESET}\n")
+                print(f"  Accounts synced: {BOLD}{accounts_synced}{RESET}")
+                print(f"  Total emails: {BOLD}{total_emails}{RESET}")
+                print(f"  Total jobs found: {BOLD}{total_jobs}{RESET}\n")
 
-                self.logger.info(f"Email sync: {emails_processed} emails, {jobs_found} jobs")
+                # Show per-account results
+                if stats.get('by_account'):
+                    print(f"{BOLD}Per-account results:{RESET}")
+                    for email, account_stats in stats['by_account'].items():
+                        if 'error' in account_stats:
+                            print(f"  {RED}✗{RESET} {email}: {account_stats['error']}")
+                        else:
+                            emails_proc = account_stats.get('emails_processed', 0)
+                            jobs_proc = account_stats.get('jobs_found', 0)
+                            print(f"  {GREEN}✓{RESET} {email}: {emails_proc} emails, {jobs_proc} jobs")
+                    print()
+
+                self.logger.info(f"Email sync: {accounts_synced} accounts, {total_emails} emails, {total_jobs} jobs")
+            elif stats and 'error' in stats:
+                print(f"{YELLOW}⚠{RESET}  {stats['error']}\n")
             else:
                 print(f"{GREEN}✓ Email sync complete (no new jobs){RESET}\n")
 

@@ -4,7 +4,7 @@ import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
-from ..email import get_account_manager, GmailProvider, JobDetector, get_email_rag
+from ..email import get_account_manager, JobDetector, get_email_rag
 from .database import get_job_database
 
 logger = logging.getLogger(__name__)
@@ -36,67 +36,105 @@ class JobManager:
         max_emails: int = 100,
         query: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Sync emails and extract job postings.
+        """Sync emails from all enabled accounts (or specific account if provided).
 
         This is the main pipeline method that:
-        1. Fetches emails from Gmail
+        1. Fetches emails from all enabled email providers
         2. Detects job aggregator emails
         3. Extracts jobs using LLM
         4. Indexes jobs in RAG
         5. Stores jobs in database
 
         Args:
-            account_email: Specific account to sync, or None for current account
-            max_emails: Maximum emails to fetch
-            query: Gmail search query (default: from config)
+            account_email: Specific account to sync, or None for all enabled accounts
+            max_emails: Maximum emails to fetch per account
+            query: Email search query (default: from config)
 
         Returns:
             Dict with sync statistics:
-                - emails_fetched: Total emails fetched
-                - aggregators_found: Job aggregator emails detected
-                - jobs_extracted: Total jobs extracted from aggregators
-                - jobs_stored: New jobs stored in database (excludes duplicates)
-                - jobs_indexed: Jobs indexed in RAG
-                - account: Email account synced
+                - accounts_synced: Number of accounts successfully synced
+                - total_emails_processed: Total emails across all accounts
+                - total_jobs_found: Total new jobs across all accounts
+                - by_account: Dict mapping email to per-account stats
+        """
+        # If specific account requested, sync only that one
+        if account_email:
+            accounts = self.account_manager.get_accounts()
+            account = next((a for a in accounts if a.email == account_email), None)
+            if not account:
+                return {'error': f'Account {account_email} not found'}
+            return self._sync_single_account(account, max_emails, query)
+
+        # Otherwise, sync ALL enabled accounts
+        all_accounts = self.account_manager.get_accounts()
+        enabled_accounts = [acc for acc in all_accounts if acc.enabled]
+
+        if not enabled_accounts:
+            logger.warning("No enabled accounts to sync")
+            return {'error': 'No enabled accounts'}
+
+        logger.info(f"Syncing {len(enabled_accounts)} enabled accounts")
+
+        # Sync each account
+        all_stats = {
+            'accounts_synced': 0,
+            'total_emails_processed': 0,
+            'total_jobs_found': 0,
+            'by_account': {}
+        }
+
+        for account in enabled_accounts:
+            try:
+                logger.info(f"Syncing account: {account.email} ({account.provider_type})")
+                stats = self._sync_single_account(account, max_emails, query)
+                all_stats['accounts_synced'] += 1
+                all_stats['total_emails_processed'] += stats.get('emails_processed', 0)
+                all_stats['total_jobs_found'] += stats.get('jobs_found', 0)
+                all_stats['by_account'][account.email] = stats
+            except Exception as e:
+                logger.error(f"Failed to sync {account.email}: {e}")
+                all_stats['by_account'][account.email] = {'error': str(e)}
+
+        return all_stats
+
+    def _sync_single_account(
+        self,
+        account,
+        max_emails: int,
+        query: Optional[str]
+    ) -> Dict[str, Any]:
+        """Sync a single account (extracted from original sync_emails logic).
+
+        Args:
+            account: Account object to sync
+            max_emails: Maximum emails to fetch
+            query: Email search query
+
+        Returns:
+            Dict with sync statistics for this account
         """
         stats = {
-            'emails_fetched': 0,
+            'emails_processed': 0,
             'aggregators_found': 0,
+            'jobs_found': 0,
             'jobs_extracted': 0,
-            'jobs_stored': 0,
             'jobs_indexed': 0,
-            'account': None,
+            'account': account.email,
             'errors': []
         }
 
         try:
-            # Get account to sync
-            if account_email:
-                accounts = self.account_manager.get_accounts()
-                account = next((a for a in accounts if a.email == account_email), None)
-                if not account:
-                    logger.error(f"Account {account_email} not found")
-                    stats['errors'].append(f"Account {account_email} not found")
-                    return stats
-            else:
-                account = self.account_manager.get_current_account()
-                if not account:
-                    logger.error("No current account set")
-                    stats['errors'].append("No current account configured")
-                    return stats
-
-            stats['account'] = account.email
             logger.info(f"Starting email sync for {account.email}")
 
-            # Step 1: Fetch emails
-            provider = GmailProvider(account.email)
+            # Step 1: Get provider using factory method
+            provider = self.account_manager.get_provider_for_account(account.email)
             if not provider.authenticate():
                 logger.error(f"Failed to authenticate {account.email}")
                 stats['errors'].append(f"Authentication failed for {account.email}")
                 return stats
 
             emails = provider.fetch_emails(max_results=max_emails, query=query)
-            stats['emails_fetched'] = len(emails)
+            stats['emails_processed'] = len(emails)
             logger.info(f"Fetched {len(emails)} emails from {account.email}")
 
             if not emails:
@@ -144,7 +182,7 @@ class JobManager:
                         )
 
                         if job_id:
-                            stats['jobs_stored'] += 1
+                            stats['jobs_found'] += 1
                             all_jobs.append(job)
                         # else: duplicate, already in database
 
@@ -171,16 +209,16 @@ class JobManager:
             self.account_manager.update_last_sync(account.email)
 
             logger.info(
-                f"Sync complete: {stats['emails_fetched']} emails, "
+                f"Sync complete: {stats['emails_processed']} emails, "
                 f"{stats['aggregators_found']} aggregators, "
                 f"{stats['jobs_extracted']} jobs extracted, "
-                f"{stats['jobs_stored']} new jobs stored"
+                f"{stats['jobs_found']} new jobs stored"
             )
 
             return stats
 
         except Exception as e:
-            logger.error(f"Email sync failed: {e}")
+            logger.error(f"Email sync failed for {account.email}: {e}")
             stats['errors'].append(f"Sync failed: {str(e)}")
             return stats
 

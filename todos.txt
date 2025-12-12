@@ -1,7 +1,7 @@
-implementation:
--make force local/remote persist, default to local on startup
--workspace_rag was queried when I asked for emails, should be email rag, figure out why
--continue with transf plan
-
-cleanup:
-remove deprecated docs in docs/
+-bundle all commands in "man" manual style
+-save links to direct job posting not to general company website
+-implement short term memory
+-give it a starting prompt telling it it is an job application helping agent with access to xyz tools
+-"models" and "switch" command should also list local models
+-"sticky" makes no sense, should default to first working model if none selected, once user selects a remote or local model, persist it for that mode (local/remote)
+-agent should be able to rank most relevant jobs, and save full raw description related to them to re-rank when more jobs come in
