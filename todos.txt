@@ -5,3 +5,6 @@
 -"models" and "switch" command should also list local models
 -"sticky" makes no sense, should default to first working model if none selected, once user selects a remote or local model, persist it for that mode (local/remote)
 -agent should be able to rank most relevant jobs, and save full raw description related to them to re-rank when more jobs come in
+
+- create arch file
+Explain the agentic AI theory behind this repo and where concepts of it are represented in code. Don’t focus on detailed explanations about the code. How does agent know about available tools? What’s a good initial prompt for this agent?
